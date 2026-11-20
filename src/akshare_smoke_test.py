@@ -67,6 +67,11 @@ def fetch_with_retry(label: str, func, attempts: int = 3):
         except Exception as exc:
             last_error = exc
             print(f"[WARN] {label} failed: {type(exc).__name__}: {exc}")
+            # Eastmoney explicitly warns that retrying during a rate-limit
+            # cooldown can extend the block. Stop immediately in that case.
+            if type(exc).__name__ == "Push2RateLimitError" or "临时限流" in str(exc):
+                print("[ERROR] Rate limit detected; stopping retries to respect the upstream cooldown.")
+                raise
             if attempt < attempts:
                 time.sleep(5 * attempt)
     raise RuntimeError(
