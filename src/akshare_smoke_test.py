@@ -76,65 +76,61 @@ def fetch_with_retry(label: str, func, attempts: int = 3):
 
 
 def fetch_spot_snapshot(symbol: str) -> dict[str, Any]:
-    frame = fetch_with_retry("A-share spot snapshot", ak.stock_zh_a_spot_em)
-    if frame is None or frame.empty:
-        raise RuntimeError("AKShare returned an empty A-share spot snapshot.")
-
-    code_col = find_column(frame, ("代码", "股票代码", "symbol"))
-    name_col = find_column(frame, ("名称", "股票简称", "name"))
-    price_col = find_column(frame, ("最新价", "最新", "price"))
-    change_col = find_column(frame, ("涨跌幅", "涨幅", "change_pct"))
-    amount_col = find_column(frame, ("成交额", "amount"))
-
-    codes = frame[code_col].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(6)
-    matches = frame.loc[codes == symbol]
-    if matches.empty:
-        raise RuntimeError(
-            f"Stock {symbol} was not found in the current spot snapshot. "
-            "It may be suspended, delisted, or the upstream response may be incomplete."
-        )
-
-    row = matches.iloc[0]
-    amount_sorted = frame.copy()
-    amount_sorted["_amount_numeric"] = pd.to_numeric(
-        amount_sorted[amount_col], errors="coerce"
+    """Fetch one stock's quote instead of crawling all 59 market-wide pages."""
+    frame = fetch_with_retry(
+        f"individual quote for {symbol}",
+        lambda: ak.stock_bid_ask_em(symbol=symbol),
+        attempts=2,
     )
-    top_rows = amount_sorted.sort_values(
-        "_amount_numeric", ascending=False
-    ).head(10)
-
-    top_turnover = []
-    for _, item in top_rows.iterrows():
-        top_turnover.append(
-            {
-                "code": str(item[code_col]).replace(".0", "").zfill(6),
-                "name": json_value(item[name_col]),
-                "latest_price": as_float(item[price_col]),
-                "change_pct": as_float(item[change_col]),
-                "amount_cny": as_float(item[amount_col]),
-            }
+    if frame is None or frame.empty:
+        raise RuntimeError(f"AKShare returned an empty quote for {symbol}.")
+    if not {"item", "value"}.issubset(frame.columns):
+        raise RuntimeError(
+            "Unexpected stock_bid_ask_em schema. "
+            f"Actual columns: {list(frame.columns)}"
         )
+
+    quote = dict(zip(frame["item"].astype(str), frame["value"]))
+    required = ("最新", "涨幅", "金额", "昨收")
+    missing = [key for key in required if key not in quote]
+    if missing:
+        raise RuntimeError(f"Quote response is missing fields: {missing}")
+
+    numeric_fields = (
+        "最新", "均价", "涨幅", "涨跌", "总手", "金额", "换手",
+        "量比", "最高", "最低", "今开", "昨收", "涨停", "跌停",
+    )
+    parsed = {key: as_float(quote.get(key)) for key in numeric_fields}
 
     return {
-        "universe_rows": int(len(frame)),
-        "columns": [str(col) for col in frame.columns],
+        "universe_rows": None,
         "target": {
             "code": symbol,
-            "name": json_value(row[name_col]),
-            "latest_price": as_float(row[price_col]),
-            "change_pct": as_float(row[change_col]),
-            "amount_cny": as_float(row[amount_col]),
+            "name": None,
+            "latest_price": parsed["最新"],
+            "change_pct": parsed["涨幅"],
+            "amount_cny": parsed["金额"],
+            "average_price": parsed["均价"],
+            "volume_lots": parsed["总手"],
+            "turnover_pct": parsed["换手"],
+            "volume_ratio": parsed["量比"],
+            "high": parsed["最高"],
+            "low": parsed["最低"],
+            "open": parsed["今开"],
+            "previous_close": parsed["昨收"],
         },
-        "top_10_by_turnover": top_turnover,
-        "source": "AKShare stock_zh_a_spot_em (Eastmoney source)",
+        "five_level_quote": {
+            str(row["item"]): as_float(row["value"])
+            for _, row in frame.iterrows()
+        },
+        "source": "AKShare stock_bid_ask_em (Eastmoney individual quote)",
         "source_quote_timestamp": None,
         "timestamp_note": (
-            "AKShare spot response does not provide a reliable per-quote "
-            "exchange timestamp in this output. retrieved_at is the collection "
-            "time, not a guaranteed exchange quote timestamp."
+            "The individual quote response does not expose a reliable exchange "
+            "timestamp. collected_at is the retrieval time, not a guaranteed "
+            "exchange quote timestamp."
         ),
     }
-
 
 def fetch_daily_history(symbol: str) -> dict[str, Any]:
     end = datetime.now(SHANGHAI).date()
@@ -203,7 +199,7 @@ def main() -> int:
         "data_sources": [],
         "notes": [
             "This is a connectivity test, not a trading signal.",
-            "Spot retrieved_at must not be represented as an exchange quote timestamp.",
+            "Individual quote collected_at must not be represented as an exchange quote timestamp.",
             "Historical daily bars may not include a completed bar for the current session before market close.",
         ],
     }
