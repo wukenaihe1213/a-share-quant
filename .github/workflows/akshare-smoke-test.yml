@@ -39,8 +39,9 @@ jobs:
       - name: Run AKShare connectivity test
         env:
           PYTHONUTF8: "1"
+          STOCK_SYMBOL: ${{ inputs.symbol }}
         run: |
-          python -m src.akshare_smoke_test --symbol "\${{ inputs.symbol }}"
+          python -m src.akshare_smoke_test --symbol "$STOCK_SYMBOL"
 
       - name: Upload test result
         if: always()
