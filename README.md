@@ -6,7 +6,7 @@
 
 ## 当前功能
 
-- 获取沪深京 A 股实时行情快照：`stock_zh_a_spot_em`
+- 获取指定股票实时盘口行情：`stock_bid_ask_em`（单股请求，避免测试时遍历全市场分页）
 - 获取指定股票前复权日线：`stock_zh_a_hist_em`
 - 对实时快照和历史日线执行基础字段检查
 - 将测试结果保存为 GitHub Actions Artifact（不自动提交个人数据）
@@ -29,7 +29,7 @@ python -m src.akshare_smoke_test --symbol 000001
 ## 数据时间说明
 
 - `collected_at` 是本程序采集数据的时间。
-- 当前 AKShare 全市场快照输出不保证包含每只股票独立的交易所报价时间；程序将 `source_quote_timestamp` 标为 `null`，不会把采集时间冒充交易所报价时间。
+- 当前 AKShare 个股盘口输出不保证包含独立的交易所报价时间；程序将 `source_quote_timestamp` 标为 `null`，不会把采集时间冒充交易所报价时间。
 - 日线数据可能在收盘前尚未形成完整当日 K 线。
 - 数据接口依赖公开数据源，可能出现限流、字段变化或暂时不可用；失败时会保存错误状态，不会伪造数据。
 
