@@ -221,3 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local generated market data
+/data/*.json
+!/data/.gitkeep
