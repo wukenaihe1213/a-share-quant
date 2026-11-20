@@ -1,0 +1,2 @@
+# Current AKShare interface names follow the 1.20.41+ naming convention.
+akshare>=1.20.54,<2.0
