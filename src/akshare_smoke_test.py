@@ -185,7 +185,10 @@ def main() -> int:
         help="Six-digit A-share code to test (default: 000001, Ping An Bank).",
     )
     args = parser.parse_args()
-    symbol = str(args.symbol).zfill(6)
+    # Strip accidental leading backslashes from workflow input before validation.
+    symbol = str(args.symbol).strip().lstrip(chr(92)).zfill(6)
+    if len(symbol) != 6 or not symbol.isdigit():
+        parser.error("symbol must be exactly six digits, e.g. 000001")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     collected_at = datetime.now(SHANGHAI).isoformat(timespec="seconds")
