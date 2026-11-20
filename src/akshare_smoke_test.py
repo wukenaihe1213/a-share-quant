@@ -213,7 +213,7 @@ def main() -> int:
         result["spot"] = fetch_spot_snapshot(symbol)
         result["daily_history"] = fetch_daily_history(symbol)
         result["data_sources"] = [
-            "stock_zh_a_spot_em",
+            "stock_bid_ask_em",
             "stock_zh_a_hist_em",
         ]
         result["status"] = "ok"
