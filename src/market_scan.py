@@ -472,6 +472,7 @@ def scan(
             )
             if history_rate_limited:
                 eastmoney_blocked = True
+                rate_limited = True
             history = history.loc[history["date"].dt.date < today].reset_index(drop=True)
             metrics = calculate_indicators(
                 history=history,
@@ -533,7 +534,13 @@ def scan(
     board_concept.sort(key=lambda x: x["change_pct"], reverse=True)
 
     success_count = len(candidates)
-    status = "ok" if success_count >= 20 else "partial"
+    industry_board_count = len(board_industry)
+    concept_board_count = len(board_concept)
+    status = (
+        "ok"
+        if success_count >= 20 and industry_board_count > 0 and concept_board_count > 0
+        else "partial"
+    )
     result = {
         "project": "a-share-quant",
         "schema_version": 1,
@@ -548,6 +555,14 @@ def scan(
             "spot_source": spot_source,
             "spot_quote_timestamp": None,
             "summary": market_summary,
+            "industry_board_count": industry_board_count,
+            "concept_board_count": concept_board_count,
+            "industry_board_source": (
+                board_industry[0].get("source") if board_industry else None
+            ),
+            "concept_board_source": (
+                board_concept[0].get("source") if board_concept else None
+            ),
             "industry_boards_top10": board_industry[:10],
             "industry_boards_bottom10": list(reversed(board_industry[-10:])),
             "concept_boards_top10": board_concept[:10],
@@ -566,6 +581,7 @@ def scan(
             "history_success": success_count,
             "history_failed": int(history_failures),
             "history_rate_limited": bool(rate_limited),
+            "eastmoney_rate_limited": bool(eastmoney_blocked),
             "history_coverage_pct": round(
                 success_count / len(pool) * 100, 2
             ) if len(pool) else 0,
