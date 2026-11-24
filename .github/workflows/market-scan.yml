@@ -1,0 +1,74 @@
+name: A-share full-market scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_history_stocks:
+        description: "Maximum number of liquid stocks for detailed daily-K-line calculation"
+        required: true
+        default: "80"
+        type: string
+      min_amount_cny:
+        description: "Minimum 20-day average turnover in CNY"
+        required: true
+        default: "100000000"
+        type: string
+      delay_seconds:
+        description: "Pause between per-stock history requests"
+        required: true
+        default: "1.2"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a-share-market-scan
+  cancel-in-progress: false
+
+jobs:
+  market-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Run full-market scan
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m src.market_scan \
+            --max-history-stocks "${{ inputs.max_history_stocks }}" \
+            --min-amount-cny "${{ inputs.min_amount_cny }}" \
+            --delay-seconds "${{ inputs.delay_seconds }}" \
+            --output-candidates 50
+
+      - name: Upload scan output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a-share-market-scan
+          path: |
+            data/market_scan.json
+            data/candidates.csv
+          if-no-files-found: warn
+          retention-days: 30
