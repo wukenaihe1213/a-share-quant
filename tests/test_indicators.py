@@ -38,8 +38,19 @@ class IndicatorTests(unittest.TestCase):
         self.assertGreater(result["return_5d_pct"], 0)
         self.assertGreater(result["return_20d_pct"], 0)
         self.assertFalse(result["buyable"])
+        self.assertFalse(result["watchlist_eligible"])
         self.assertEqual(result["intraday_confirmation"], "not_checked")
         self.assertIn(result["daily_setup_tier"], ("B", "C"))
+
+    def test_calculates_60_day_return_when_history_is_long_enough(self):
+        result = calculate_indicators(
+            history=self.make_history(70),
+            current_price=16.0,
+            current_change_pct=0.5,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertIsNotNone(result["return_60d_pct"])
+        self.assertTrue(result["trend_60d_up"])
 
     def test_current_day_bar_is_excluded(self):
         history = self.make_history()
