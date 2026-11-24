@@ -239,37 +239,63 @@ def normalize_history(frame: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values("date").drop_duplicates("date").reset_index(drop=True)
 
 
-def fetch_history(symbol: str, start_date: str, end_date: str) -> tuple[pd.DataFrame, str]:
+def market_prefixed_symbol(symbol: str) -> str:
+    code = str(symbol).strip().zfill(6)
+    if code.startswith(("92", "4", "8")):
+        return f"bj{code}"
+    if code.startswith(("6", "5", "9")):
+        return f"sh{code}"
+    return f"sz{code}"
+
+
+def fetch_history(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    skip_eastmoney: bool = False,
+) -> tuple[pd.DataFrame, str, bool]:
     primary = "stock_zh_a_hist_em"
-    candidates = [primary] + interface_alternatives(primary)
-    for fallback in ("stock_zh_a_hist_sina", "stock_zh_a_hist_tx"):
+    candidates: list[str] = []
+    if not skip_eastmoney:
+        candidates = [primary] + interface_alternatives(primary)
+    for fallback in ("stock_zh_a_hist_tx", "stock_zh_a_hist_sina", "stock_zh_a_daily"):
         if fallback not in candidates:
             candidates.append(fallback)
+
     errors: list[str] = []
+    eastmoney_rate_limited = False
     for interface_name in candidates:
         func = getattr(ak, interface_name, None)
         if not callable(func):
             continue
         try:
-            raw = invoke_history_function(func, symbol, start_date, end_date)
-            return normalize_history(raw), interface_name
+            request_symbol = (
+                market_prefixed_symbol(symbol)
+                if "sina" in interface_name or interface_name.endswith("_daily")
+                else symbol
+            )
+            raw = invoke_history_function(
+                func, request_symbol, start_date, end_date
+            )
+            return normalize_history(raw), interface_name, eastmoney_rate_limited
         except Exception as exc:
             errors.append(f"{interface_name}: {type(exc).__name__}: {exc}")
             print(f"[WARN] {symbol} {errors[-1][:300]}")
-            if is_rate_limit(exc):
-                print(f"[WARN] History source {interface_name} is rate-limited; trying alternate.")
+            if is_rate_limit(exc) and "em" in interface_name:
+                eastmoney_rate_limited = True
+                print("[WARN] Eastmoney history source is rate-limited; skip it for the rest of this run.")
     raise RuntimeError("All historical sources failed: " + " | ".join(errors[-3:]))
 
 
 def normalize_boards(frame: pd.DataFrame, board_type: str) -> list[dict[str, Any]]:
     if frame is None or frame.empty:
         return []
-    name_col = choose_column(frame, ("板块名称", "名称", "name"))
+    name_col = choose_column(frame, ("板块名称", "板块", "名称", "name"))
     pct_col = choose_column(frame, ("涨跌幅", "涨幅", "change_pct"))
-    amount_col = choose_column(frame, ("成交额", "amount"))
+    amount_col = choose_column(frame, ("成交额", "总成交额", "amount"))
     adv_col = choose_column(frame, ("上涨家数", "上涨数", "advancers"))
     dec_col = choose_column(frame, ("下跌家数", "下跌数", "decliners"))
-    lead_col = choose_column(frame, ("领涨股票", "领涨股", "leader"))
+    lead_col = choose_column(frame, ("领涨股票", "领涨股", "股票名称", "leader"))
     if name_col is None:
         return []
     rows = []
@@ -286,7 +312,33 @@ def normalize_boards(frame: pd.DataFrame, board_type: str) -> list[dict[str, Any
     return rows
 
 
-def fetch_board_data() -> tuple[list[dict[str, Any]], list[str]]:
+def fetch_sina_boards() -> tuple[list[dict[str, Any]], list[str]]:
+    all_rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    func = getattr(ak, "stock_sector_spot", None)
+    if not callable(func):
+        return [], ["stock_sector_spot: interface unavailable in installed AKShare"]
+    for indicator, board_type in (("行业", "industry"), ("概念", "concept")):
+        try:
+            frame = func(indicator=indicator)
+            rows = normalize_boards(frame, board_type)
+            for item in rows:
+                item["source"] = "sina"
+            all_rows.extend(rows)
+            print(f"[OK] Sina {board_type} boards: {len(rows)}")
+        except Exception as exc:
+            errors.append(
+                f"stock_sector_spot({indicator}): {type(exc).__name__}: {exc}"[:500]
+            )
+            print(f"[WARN] Sina {board_type} boards unavailable: {exc}")
+    return all_rows, errors
+
+
+def fetch_board_data(prefer_sina: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+    if prefer_sina:
+        print("[INFO] Eastmoney is rate-limited/unavailable; using Sina sector data.")
+        return fetch_sina_boards()
+
     all_rows: list[dict[str, Any]] = []
     errors: list[str] = []
     endpoints = (
@@ -300,11 +352,29 @@ def fetch_board_data() -> tuple[list[dict[str, Any]], list[str]]:
             continue
         try:
             frame = func()
-            all_rows.extend(normalize_boards(frame, board_type))
-            print(f"[OK] {board_type} boards: {len(frame)}")
+            rows = normalize_boards(frame, board_type)
+            for item in rows:
+                item["source"] = "eastmoney"
+            all_rows.extend(rows)
+            print(f"[OK] Eastmoney {board_type} boards: {len(rows)}")
         except Exception as exc:
             errors.append(f"{endpoint}: {type(exc).__name__}: {exc}"[:500])
             print(f"[WARN] Board data unavailable from {endpoint}: {exc}")
+            if is_rate_limit(exc):
+                print("[WARN] Eastmoney board endpoint is rate-limited; stop querying this source.")
+                break
+
+    have_industry = any(x["board_type"] == "industry" for x in all_rows)
+    have_concept = any(x["board_type"] == "concept" for x in all_rows)
+    if not have_industry or not have_concept:
+        fallback_rows, fallback_errors = fetch_sina_boards()
+        missing_types = set()
+        if not have_industry:
+            missing_types.add("industry")
+        if not have_concept:
+            missing_types.add("concept")
+        all_rows.extend(x for x in fallback_rows if x["board_type"] in missing_types)
+        errors.extend(fallback_errors)
     return all_rows, errors
 
 
@@ -371,7 +441,10 @@ def scan(
     errors: list[str] = []
     spot, spot_source, spot_errors = fetch_spot_universe()
     errors.extend(spot_errors)
-    boards, board_errors = fetch_board_data()
+    eastmoney_blocked = any("Push2RateLimitError" in item for item in spot_errors)
+    boards, board_errors = fetch_board_data(
+        prefer_sina=eastmoney_blocked or spot_source == "stock_zh_a_spot_sina"
+    )
     errors.extend(board_errors)
 
     market_summary = summarize_market(spot)
@@ -389,7 +462,11 @@ def scan(
             time.sleep(delay_seconds)
         print(f"[INFO] History scan {index + 1}/{len(pool)}: {symbol} {row['name']}")
         try:
-            history, history_source = fetch_history(symbol, start_date, end_date)
+            history, history_source, history_rate_limited = fetch_history(
+                symbol, start_date, end_date, skip_eastmoney=eastmoney_blocked
+            )
+            if history_rate_limited:
+                eastmoney_blocked = True
             history = history.loc[history["date"].dt.date < today].reset_index(drop=True)
             metrics = calculate_indicators(
                 history=history,
@@ -429,7 +506,14 @@ def scan(
                 break
 
     candidates.sort(
-        key=lambda item: (item["score"], item.get("average_amount_20d_cny") or 0),
+        key=lambda item: (
+            item.get("daily_setup_tier") == "B",
+            item.get("no_chase", False),
+            item.get("trend_up", False),
+            item.get("pullback_ok", False),
+            item["score"],
+            item.get("average_amount_20d_cny") or 0,
+        ),
         reverse=True,
     )
     board_industry = [
@@ -481,6 +565,15 @@ def scan(
                 success_count / len(pool) * 100, 2
             ) if len(pool) else 0,
             "candidate_count": int(len(candidates)),
+            "history_positive_60d": int(
+                sum(1 for item in candidates if (item.get("return_60d_pct") or 0) > 0)
+            ),
+            "daily_setup_b_count": int(
+                sum(1 for item in candidates if item.get("daily_setup_tier") == "B")
+            ),
+            "daily_setup_c_count": int(
+                sum(1 for item in candidates if item.get("daily_setup_tier") == "C")
+            ),
         },
         "candidates": candidates[:output_candidates],
         "errors": errors[-30:],
@@ -489,6 +582,7 @@ def scan(
             "No 14:30 minute-bar confirmation is included in Phase 3; all candidates have buyable=false.",
             "No precise buy zone or take-profit price is emitted until minute-level confirmation and support validation are implemented.",
             "The spot endpoint retrieval time is not a guaranteed exchange quote timestamp.",
+            "When Eastmoney is rate-limited, Sina sector data is used as a fallback; sector classifications and names may differ by provider.",
             "Sector board rankings are market context and are not treated as proof that an individual stock belongs to a strong trend setup.",
         ],
     }
