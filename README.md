@@ -2,50 +2,55 @@
 
 个人 A 股量化研究与选股项目，使用 Python + AKShare 获取公开市场数据。
 
-> 当前处于 **Phase 1：行情连通性验证**。先验证 GitHub Actions 云端运行环境能否访问 AKShare，再逐步增加历史行情指标、候选筛选、历史推荐复盘和公开 JSON 输出。
+> 当前阶段：**Phase 2：全市场快照、板块概览和趋势回调指标初筛**。每日自动定时运行尚未启用；先通过手动 workflow 验证数据源覆盖、限流情况和指标正确性。
 
-## 当前功能
+## 已实现功能
 
-- 获取指定股票实时盘口行情：`stock_bid_ask_em`（单股请求，避免测试时遍历全市场分页）
-- 获取指定股票前复权日线：`stock_zh_a_hist_em`
-- 对实时快照和历史日线执行基础字段检查
-- 将测试结果保存为 GitHub Actions Artifact（不自动提交个人数据）
+### 单股连通性测试
+- 获取指定股票实时盘口行情：stock_bid_ask_em
+- 获取指定股票前复权日线：stock_zh_a_hist_em
+- 工作流：AKShare connectivity smoke test
 
-## 运行方式
+### 全市场扫描（手动测试）
+- 获取沪深京 A 股实时行情快照，优先使用 stock_zh_a_spot_em，并尝试 AKShare 元数据中登记的备用接口
+- 统计上涨/下跌家数、市场成交额和成交额超过 1 亿元的股票数量
+- 获取行业板块、概念板块涨跌幅概览
+- 对满足流动性条件的股票建立历史 K 线请求池，默认最多请求 80 只，逐只请求并限速
+- 计算 MA5、MA10、MA20、近5/20日涨幅、近10日上涨波段、近5日高点回撤、成交量收缩比、20日平均成交额和支撑距离
+- 将日线初筛结果标记为 B/C 档；没有分钟线确认时绝不标记为 A 档或可买入
+- 输出 data/market_scan.json 和 data/candidates.csv，作为 GitHub Actions Artifact 保存30天
 
-1. 打开仓库的 **Actions** 页面。
-2. 选择 **AKShare connectivity smoke test**。
-3. 点击 **Run workflow**。
-4. 股票代码默认是 `000001`（平安银行），也可以填写其他六位 A 股代码。
-5. 运行结束后，在本次 workflow run 页面下载 `akshare-smoke-test` Artifact，查看 `smoke_test.json`。
+## 运行全市场扫描
+1. 打开仓库 Actions 页面。
+2. 选择 A-share full-market scan。
+3. 点击 Run workflow。
+4. 初次测试建议保留默认值：max_history_stocks=80、min_amount_cny=100000000、delay_seconds=1.2。
+5. 等待运行结束，在 Artifacts 下载 a-share-market-scan。
 
-本地运行需要 Python 3.11.5+：
+本地运行需要 Python 3.11 环境：
+- python -m pip install -r requirements.txt
+- python -m unittest discover -s tests -v
+- python -m src.market_scan --max-history-stocks 80 --min-amount-cny 100000000 --delay-seconds 1.2
 
-```bash
-python -m pip install -r requirements.txt
-python -m src.akshare_smoke_test --symbol 000001
-```
-
-## 数据时间说明
-
-- `collected_at` 是本程序采集数据的时间。
-- 当前 AKShare 个股盘口输出不保证包含独立的交易所报价时间；程序将 `source_quote_timestamp` 标为 `null`，不会把采集时间冒充交易所报价时间。
-- 日线数据可能在收盘前尚未形成完整当日 K 线。
-- 数据接口依赖公开数据源，可能出现限流、字段变化或暂时不可用；失败时会保存错误状态，不会伪造数据。
-
-## 安全与隐私
-
-- 不要把 GitHub Token、密码、券商账号、个人持仓或交易记录提交到公开仓库。
-- 后续公开发布的 JSON 只包含市场数据和技术指标，不包含个人身份或账户信息。
+## 数据质量与限制
+- 全市场快照与详细历史 K 线分开处理：先获取全市场快照，再按成交额和可用的60日涨幅字段优先挑选最多80只股票获取详细日线。这不是对全市场每一只股票都计算了完整技术指标；覆盖数量会写入 JSON。
+- AKShare 上游公开接口可能限流、变更字段或暂时不可用。限流时尝试备用数据源，不会对同一受限接口反复重试；数据不完整会在结果中体现。
+- spot_retrieved_at 是程序采集时间，不是交易所逐笔报价时间。
+- MA和成交量指标只使用当前交易日前已完成的日K线；当前价格/涨幅来自实时快照，避免把未收盘日K线混入均线。
+- 本阶段尚未实现14:30分钟线确认、财务公告核验、历史推荐复盘和自动通知；所有候选的 buyable 均为 false，不输出虚构买入价和止盈价。
+- 全市场快照若不足1000只有效股票，将拒绝作为完整市场数据使用。
 
 ## 后续路线
+- Phase 1：单股行情与历史K线连通性测试（已通过）。
+- Phase 2：全市场行情、板块概览、技术指标初筛（当前验证中）。
+- Phase 3：14:25～14:30分钟线确认、行业映射和数据质量门槛。
+- Phase 4：推荐历史快照、10个交易日跟踪复盘。
+- Phase 5：GitHub Pages/公开 JSON 输出与 ChatGPT 读取链路。
+- Phase 6：交易日历与每日自动运行；完成数据链路验收后再启用。
 
-- Phase 1：AKShare 连通性测试。
-- Phase 2：历史日线、分钟线、指数与板块数据采集。
-- Phase 3：趋势回调筛选、数据质量门槛与候选评分。
-- Phase 4：推荐历史快照、10 个交易日复盘与表现统计。
-- Phase 5：GitHub Pages/公开 JSON 发布，并验证 ChatGPT 读取链路。
+## 安全与免责声明
+- 不要把 GitHub Token、密码、券商账号、个人持仓或交易记录提交到公开仓库。
+- 公开输出只包含公开市场数据和技术指标，不包含个人账户信息。
+- 本项目仅用于个人研究与技术验证，不构成投资建议。数据准确性、完整性和及时性受上游数据源及网络条件影响。
 
-## 数据来源与免责声明
-
-本项目使用 [AKShare](https://github.com/akfamily/akshare) 获取公开财经数据。数据仅用于个人研究与技术验证，不构成投资建议。数据准确性、完整性和及时性受上游网站及网络条件影响。
+数据来源：AKShare。
