@@ -45,6 +45,10 @@ def calculate_indicators(
 
     return_5d = (current_price / float(close.iloc[-6]) - 1) * 100
     return_20d = (current_price / float(close.iloc[-21]) - 1) * 100
+    return_60d = (
+        (current_price / float(close.iloc[-61]) - 1) * 100
+        if len(close) >= 61 else None
+    )
     runup_10d = (float(high.tail(10).max()) / float(close.iloc[-11]) - 1) * 100
 
     five_bar_high_series = high.tail(5).reset_index(drop=True)
@@ -170,6 +174,8 @@ def calculate_indicators(
     return {
         "return_5d_pct": round(return_5d, 2),
         "return_20d_pct": round(return_20d, 2),
+        "return_60d_pct": round(return_60d, 2) if return_60d is not None else None,
+        "trend_60d_up": bool(return_60d is not None and return_60d > 0),
         "runup_10d_pct": round(runup_10d, 2),
         "pullback_from_5d_high_pct": round(pullback_pct, 2),
         "pullback_depth_pct": round(pullback_depth, 2),
@@ -194,6 +200,7 @@ def calculate_indicators(
         "no_chase": bool(no_chase),
         "score": int(score),
         "daily_setup_tier": tier,
+        "watchlist_eligible": bool(core_setup and score >= 70),
         "intraday_confirmation": "not_checked",
         "buyable": False,
         "buy_zone": None,
