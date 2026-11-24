@@ -257,7 +257,12 @@ def fetch_history(
     primary = "stock_zh_a_hist_em"
     candidates: list[str] = []
     if not skip_eastmoney:
-        candidates = [primary] + interface_alternatives(primary)
+        candidates.append(primary)
+        for alternative in interface_alternatives(primary):
+            if alternative not in (
+                "stock_zh_a_hist_tx", "stock_zh_a_hist_sina", "stock_zh_a_daily"
+            ) and alternative not in candidates:
+                candidates.append(alternative)
     for fallback in ("stock_zh_a_hist_tx", "stock_zh_a_hist_sina", "stock_zh_a_daily"):
         if fallback not in candidates:
             candidates.append(fallback)
