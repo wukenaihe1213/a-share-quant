@@ -146,7 +146,9 @@ def choose_column(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
 
 
 def clean_code(value: Any) -> str | None:
-    text = str(value).strip().upper()
+    if isinstance(value, (int, float)) and float(value).is_integer():
+        return str(int(value)).zfill(6)
+    text = str(value).strip().upper().replace(".0", "")
     match = re.search(r"(\d{6})$", text)
     if not match:
         match = re.search(r"(\d{6})", text)
@@ -157,9 +159,11 @@ def normalize_spot(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
         raise ValueError("Spot endpoint returned an empty DataFrame.")
     columns = {key: choose_column(frame, aliases) for key, aliases in SPOT_ALIASES.items()}
-    if columns["code"] is None or columns["name"] is None or columns["price"] is None:
+    required_spot_fields = ("code", "name", "price", "change_pct", "amount")
+    missing_spot_fields = [key for key in required_spot_fields if columns[key] is None]
+    if missing_spot_fields:
         raise ValueError(
-            "Spot schema does not contain code/name/price. "
+            f"Spot schema is missing required fields {missing_spot_fields}. "
             f"Columns received: {list(frame.columns)}"
         )
     normalized = pd.DataFrame()
