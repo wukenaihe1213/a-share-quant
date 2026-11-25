@@ -174,12 +174,13 @@ def calculate_indicators(
         base_setup and pullback_ok and volume_shrinking and support_near
     )
 
-    # B means the medium-term trend/liquidity gates pass and most daily
-    # structure signals are present. Minute-bar confirmation is still absent,
-    # so this phase must never label a candidate A or buyable.
+    # B requires an acceptable prior run-up (5% to 25%) plus at least
+    # two of the three core pullback/volume/support signals. This prevents
+    # weak sideways names and already-overheated spikes from being promoted.
+    core_structure_signals = sum((pullback_ok, volume_shrinking, support_near))
     tier = (
         "B"
-        if base_setup and score >= 60 and partial_setup_components >= 2
+        if base_setup and runup_acceptable and score >= 60 and core_structure_signals >= 2
         else "C"
     )
 
@@ -207,6 +208,7 @@ def calculate_indicators(
         "runup_preferred": bool(runup_preferred),
         "runup_acceptable": bool(runup_acceptable),
         "partial_setup_components": int(partial_setup_components),
+        "core_structure_signals": int(core_structure_signals),
         "pullback_ok": bool(pullback_ok),
         "volume_shrinking": bool(volume_shrinking),
         "support_near": bool(support_near),
