@@ -771,7 +771,10 @@ def calculate_indicators(
         strategy_name = "暂未达到两类策略观察条件"
         daily_tier = "N"
         reasons: list[str] = []
-        missing_conditions = trend_missing + bottom_missing
+        missing_conditions = (
+            trend_missing + bottom_missing + breakout_missing
+            + momentum_missing + next_day_missing + oversold_missing
+        )
     else:
         best_strategy = max(
             qualified,
@@ -782,17 +785,12 @@ def calculate_indicators(
         daily_tier = "B" if any(
             strategy_tiers[name] == "B" for name in strategy_tiers
         ) else "C"
-        candidate_strategy = (
-            "both"
-            if all(strategy_tiers[name] in ("B", "C") for name in strategy_tiers)
-            else best_strategy
-        )
+        candidate_strategy = best_strategy
         strategy_name = (
             strategy_labels[best_strategy]
             if len(qualified) == 1
             else "多策略共振：" + "、".join(strategy_labels[name] for name in qualified)
         )
-        candidate_strategy = best_strategy if len(qualified) == 1 else "multiple"
         reasons, missing_conditions = strategy_reason_map[best_strategy]
         # Keep the aggregate score comparable across the two independent models.
         best_score = max(strategy_scores[name] for name in qualified)
@@ -908,6 +906,6 @@ def calculate_indicators(
             "Six independent setups are scored: trend pullback, base reversal, breakout, momentum continuation, next-day strength watch and oversold bounce. "
             "Daily snapshot scores are not forecasts; no minute-bar confirmation is available, so buyable remains false. "
             "ATR(14) is a volatility feature, not a return forecast. "
-            "B-tier buy-list candidates must pass the 100-share single-position budget check."
+            "B-tier candidates must pass the 100-share single-position budget check; B tier is not an executable buy signal."
         ),
     }
