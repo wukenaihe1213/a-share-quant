@@ -239,13 +239,21 @@ def fetch_tencent_sample(sample_codes: list[str]) -> tuple[pd.DataFrame, dict[st
     current = finished
     ages = [(current - value).total_seconds() for value in valid_timestamps]
     session_open = is_cn_continuous_trading_clock_window(current)
+    returned_symbols = int(frame["code"].nunique())
+    coverage_pct = returned_symbols / max(len(sample_codes), 1) * 100
     metadata = {
         "source": "tencent_qt_gtimg",
-        "status": "ok",
+        "status": (
+            "ok"
+            if returned_symbols == len(sample_codes) and not errors
+            else "partial"
+        ),
         "started_at": started.isoformat(timespec="seconds"),
         "finished_at": finished.isoformat(timespec="seconds"),
         "requested_symbols": len(sample_codes),
-        "returned_symbols": int(frame["code"].nunique()),
+        "returned_symbols": returned_symbols,
+        "quote_coverage_pct": round(coverage_pct, 2),
+        "batch_errors": errors[:20],
         "quote_timestamp_count": len(valid_timestamps),
         "missing_or_invalid_timestamp_count": int(len(frame) - len(valid_timestamps)),
         "latest_quote_timestamp": (
