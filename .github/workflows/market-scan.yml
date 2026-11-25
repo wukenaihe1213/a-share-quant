@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       max_history_stocks:
-        description: "Maximum number of liquid stocks for detailed daily-K-line calculation"
+        description: "Maximum number of diversified multi-signal stocks for detailed daily-K-line calculation"
         required: true
-        default: "120"
+        default: "300"
         type: string
       min_amount_cny:
         description: "Minimum 20-day average turnover in CNY"
         required: true
-        default: "100000000"
+        default: "50000000"
         type: string
       delay_seconds:
         description: "Pause between per-stock history requests"
