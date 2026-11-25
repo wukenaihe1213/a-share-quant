@@ -165,6 +165,10 @@ def fetch_baostock_universe() -> pd.DataFrame:
     frame["code"] = frame["code"].astype(str).str.split(".").str[-1].str.zfill(6)
     frame["name"] = frame["code_name"].astype(str).str.strip()
     frame = frame.loc[frame["code"].str.match(r"^\d{6}$")]
+    # Keep A-share prefixes only; exclude B shares, ETFs, indices and convertibles.
+    frame = frame.loc[
+        frame["code"].str.startswith(("0", "3", "6", "4", "8", "92"))
+    ]
     frame = frame.drop_duplicates("code").reset_index(drop=True)
     if len(frame) < 1000:
         raise RuntimeError(
