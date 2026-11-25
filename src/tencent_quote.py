@@ -65,7 +65,7 @@ def parse_tencent_quote_text(text: str) -> list[dict[str, Any]]:
             "amount": amount_wan * 10_000 if amount_wan is not None else None,
             "volume": _number(fields, 36),
             "turnover_pct": _number(fields, 38),
-            "volume_ratio": _number(fields, 47),
+            "volume_ratio": _number(fields, 49),
             "pct_60d": None,
             "industry": None,
             "quote_timestamp": fields[30].strip() or None,
