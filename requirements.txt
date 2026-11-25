@@ -1,4 +1,4 @@
 # Current AKShare interface names follow the 1.20.41+ naming convention.
 akshare>=1.20.54,<2.0
 requests>=2.31,<3
-baostock>=0.8.9,<1.0
+baostock>=0.9.4,<1.0
