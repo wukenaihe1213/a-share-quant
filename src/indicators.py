@@ -150,6 +150,26 @@ def calculate_indicators(
     )
     average_amount_20d = float(amount.tail(20).mean())
 
+    # ATR(14) is used as a volatility suitability/ranking feature, not as a
+    # forecast or a guaranteed stop distance.
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = float(true_range.tail(14).mean())
+    atr_pct = atr14 / current_price * 100 if current_price > 0 else None
+    atr_suitable = bool(atr_pct is not None and 1.2 <= atr_pct <= 6.5)
+
+    investable_capital = account_capital_cny * (1 - cash_reserve_pct / 100)
+    budget_per_position = investable_capital / max_positions
+    one_lot_cost = current_price * 100
+    affordable = bool(one_lot_cost <= budget_per_position + 1e-9)
+
     ma_values = {"MA5": ma5, "MA10": ma10, "MA20": ma20}
     support_distances = {
         name: abs(current_price / value - 1) * 100
@@ -194,7 +214,7 @@ def calculate_indicators(
         volume_shrink_ratio is not None and volume_shrink_ratio <= 0.90
     )
     liquidity_ok = average_amount_20d >= average_amount_floor
-    no_chase = current_change_pct is None or current_change_pct <= 4.5
+    no_chase = current_change_pct is None or current_change_pct <= 4.0
     not_crashing = current_change_pct is None or current_change_pct >= -5.0
     daily_risk_ok = no_chase and not_crashing
 
@@ -265,12 +285,38 @@ def calculate_indicators(
         trend_up and liquidity_ok and daily_risk_ok
     )
     trend_structure_signals = sum((pullback_ok, volume_shrinking, support_near))
-    if (
-        trend_base_ok and runup_acceptable
-        and trend_score >= 55 and trend_structure_signals >= 1
-    ):
+    if atr_suitable:
+        trend_score += 5
+        trend_reasons.append("ATR波动率处于短线观察区间")
+    else:
+        trend_missing.append("ATR波动率偏低或偏高，短线空间/风险不理想")
+
+    if not affordable:
+        trend_missing.append("100股一手超过单只3500元预算")
+
+    # B tier requires a real 2-5 day pullback and at least one additional
+    # confirmation (shrinking volume or nearby support). No-pullback leaders
+    # are not promoted into a pullback strategy just because the score is high.
+    trend_b_ready = bool(
+        trend_base_ok
+        and runup_acceptable
+        and pullback_ok
+        and trend_structure_signals >= 2
+        and atr_suitable
+        and affordable
+        and trend_score >= 60
+    )
+    trend_c_ready = bool(
+        trend_base_ok
+        and runup_acceptable
+        and 0.8 <= pullback_depth <= 10.0
+        and 1 <= days_since_peak <= 5
+        and trend_structure_signals >= 1
+        and trend_score >= 40
+    )
+    if trend_b_ready:
         trend_tier = "B"
-    elif trend_base_ok and trend_score >= 35:
+    elif trend_c_ready:
         trend_tier = "C"
     else:
         trend_tier = "N"
@@ -314,6 +360,18 @@ def calculate_indicators(
             )
         )
     )
+    bottom_repair = bool(
+        current_price >= ma5 * 0.98
+        and (
+            (ma5_slope_pct is not None and ma5_slope_pct >= -0.2)
+            or return_3d >= 1.0
+        )
+    )
+    severe_decline = bool(
+        return_20d <= -25.0
+        or (drawdown_60d_high is not None and drawdown_60d_high <= -50.0)
+        or (ma20_slope_pct is not None and ma20_slope_pct <= -8.0)
+    )
 
     bottom_score = 0
     bottom_reasons: list[str] = []
@@ -349,18 +407,44 @@ def calculate_indicators(
         bottom_reasons.append("近20日平均成交额达到流动性门槛")
     else:
         bottom_missing.append("近20日平均成交额不足或数据缺失")
+    if atr_suitable:
+        bottom_score += 5
+        bottom_reasons.append("ATR波动率处于短线观察区间")
+    else:
+        bottom_missing.append("ATR波动率偏低或偏高，短线空间/风险不理想")
     if daily_risk_ok:
         bottom_score += 5
     else:
         bottom_missing.append("当日涨跌幅过大，暂不参与")
 
+    if severe_decline:
+        bottom_score = max(0, bottom_score - 20)
+        bottom_missing.append("中期跌幅或MA20下行斜率过大，防范接飞刀")
+    if not bottom_repair:
+        bottom_missing.append("尚未站回MA5附近或MA5未出现企稳迹象")
+    if not affordable:
+        bottom_missing.append("100股一手超过单只3500元预算")
+
     bottom_base_ok = (
         prior_decline and near_bottom_zone and base_holds_20d_low
         and liquidity_ok and daily_risk_ok
     )
-    if bottom_base_ok and stabilization and bottom_score >= 65:
+    bottom_b_ready = bool(
+        bottom_base_ok
+        and stabilization
+        and volume_bottom_confirmation
+        and bottom_repair
+        and not severe_decline
+        and atr_suitable
+        and affordable
+        and bottom_score >= 70
+    )
+    bottom_c_ready = bool(
+        bottom_base_ok and stabilization and bottom_score >= 45
+    )
+    if bottom_b_ready:
         bottom_tier = "B"
-    elif bottom_base_ok and bottom_score >= 45:
+    elif bottom_c_ready:
         bottom_tier = "C"
     else:
         bottom_tier = "N"
@@ -451,6 +535,13 @@ def calculate_indicators(
         "volume_shrink_ratio_3d_vs_prev5d": round(volume_shrink_ratio, 3)
         if volume_shrink_ratio is not None else None,
         "average_amount_20d_cny": round(average_amount_20d, 2),
+        "atr14": round(atr14, 4),
+        "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+        "atr_suitable": bool(atr_suitable),
+        "one_lot_cost_cny": round(one_lot_cost, 2),
+        "affordable": bool(affordable),
+        "bottom_repair": bool(bottom_repair),
+        "bottom_severe_decline": bool(severe_decline),
         "trend_up": trend_up,
         "runup_preferred": bool(runup_preferred),
         "runup_acceptable": bool(runup_acceptable),
@@ -486,6 +577,8 @@ def calculate_indicators(
         "calculation_basis": (
             "Completed daily bars before current_date are used for all historical metrics; "
             "current_price/current_change_pct are the separately retrieved spot snapshot. "
-            "Trend-pullback and bottom-reversal scores are independent."
+            "Trend-pullback and bottom-reversal scores are independent. "
+            "ATR(14) is a volatility filter/ranking feature, not a return forecast. "
+            "B-tier candidates must pass the 100-share single-position budget check."
         ),
     }
