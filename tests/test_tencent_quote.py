@@ -21,7 +21,9 @@ class TencentQuoteTests(unittest.TestCase):
         fields[36] = "100"
         fields[37] = "104629"
         fields[38] = "0.33"
-        fields[47] = "0.42"
+        fields[47] = "10.12"  # limit-up price; field 47 is NOT volume ratio
+        fields[48] = "9.10"   # limit-down price
+        fields[49] = "0.42"   # volume ratio
         return 'v_sh600000="' + "~".join(fields) + '";'
 
     def test_parse_tencent_quote_and_convert_amount_from_wan_to_yuan(self):
