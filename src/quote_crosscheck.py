@@ -315,10 +315,22 @@ def run_crosscheck(sample_size: int = 150) -> dict[str, Any]:
     sample_codes = choose_sample_codes(list(snapshots.values()), sample_size)
     result["sample_codes"] = sample_codes
 
-    tencent_frame, tencent_meta, tencent_errors = fetch_tencent_sample(sample_codes)
-    snapshots["tencent_qt_gtimg"] = tencent_frame
-    metadata["tencent_qt_gtimg"] = tencent_meta
-    result["warnings"].extend(tencent_errors[:20])
+    try:
+        tencent_frame, tencent_meta, tencent_errors = fetch_tencent_sample(sample_codes)
+        snapshots["tencent_qt_gtimg"] = tencent_frame
+        metadata["tencent_qt_gtimg"] = tencent_meta
+        result["warnings"].extend(tencent_errors[:20])
+        print(f"[OK] tencent_qt_gtimg: {tencent_meta['returned_symbols']} sample quotes")
+    except Exception as exc:
+        metadata["tencent_qt_gtimg"] = {
+            "source": "tencent_qt_gtimg",
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}"[:1000],
+        }
+        result["warnings"].append(
+            f"tencent_qt_gtimg: {type(exc).__name__}: {exc}"[:500]
+        )
+        print(f"[WARN] tencent_qt_gtimg: {type(exc).__name__}: {exc}")
 
     for source, meta in metadata.items():
         result["sources"][source] = meta
