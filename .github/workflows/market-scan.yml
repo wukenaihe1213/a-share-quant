@@ -6,7 +6,7 @@ on:
       max_history_stocks:
         description: "Maximum number of liquid stocks for detailed daily-K-line calculation"
         required: true
-        default: "80"
+        default: "120"
         type: string
       min_amount_cny:
         description: "Minimum 20-day average turnover in CNY"
