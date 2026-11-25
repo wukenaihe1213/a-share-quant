@@ -15,6 +15,12 @@ import akshare as ak
 import pandas as pd
 
 from src.indicators import calculate_indicators
+from src.tencent_quote import (
+    fetch_baostock_history,
+    fetch_baostock_universe,
+    fetch_tencent_quotes,
+    market_code_to_tencent,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,6 +191,41 @@ def normalize_spot(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def fetch_tencent_spot_universe() -> tuple[pd.DataFrame, str, list[str]]:
+    """Independent live-quote fallback: BaoStock universe + Tencent quote batches."""
+    universe = fetch_baostock_universe()
+    symbols = [market_code_to_tencent(code) for code in universe["code"].tolist()]
+    quotes, quote_errors = fetch_tencent_quotes(symbols, batch_size=80)
+    frame = pd.DataFrame(quotes)
+    if frame.empty:
+        raise RuntimeError("Tencent returned an empty A-share quote snapshot.")
+
+    names = dict(zip(universe["code"].astype(str), universe["name"].astype(str)))
+    frame["name"] = frame.apply(
+        lambda row: row["name"] if str(row.get("name", "")).strip()
+        else names.get(str(row["code"]), ""),
+        axis=1,
+    )
+    frame["industry"] = None
+    frame["pct_60d"] = float("nan")
+    coverage = len(frame) / max(len(universe), 1)
+    if len(frame) < 1000 or coverage < 0.60:
+        raise RuntimeError(
+            f"Tencent quote coverage is incomplete: {len(frame)}/{len(universe)} "
+            f"({coverage:.1%}); refusing to scan a partial market snapshot."
+        )
+
+    warnings = [
+        f"Tencent quote coverage: {len(frame)}/{len(universe)} ({coverage:.1%})"
+    ]
+    warnings.extend(quote_errors[:10])
+    print(
+        f"[OK] Spot universe: {len(frame)} symbols via Tencent "
+        f"(BaoStock universe coverage {coverage:.1%})"
+    )
+    return frame.reset_index(drop=True), "tencent_qt_gtimg_baostock_universe", warnings
+
+
 def fetch_spot_universe() -> tuple[pd.DataFrame, str, list[str]]:
     primary = "stock_zh_a_spot_em"
     candidates = [primary] + interface_alternatives(primary)
@@ -212,7 +253,16 @@ def fetch_spot_universe() -> tuple[pd.DataFrame, str, list[str]]:
             print(f"[WARN] {message}")
             if is_rate_limit(exc):
                 print(f"[WARN] Rate limit on {interface_name}; trying an alternate source.")
-    raise RuntimeError("No full-market spot source succeeded. " + " | ".join(errors[-4:]))
+    try:
+        print("[INFO] All AKShare spot sources failed; switching to Tencent live quotes + BaoStock universe.")
+        frame, source, fallback_errors = fetch_tencent_spot_universe()
+        errors.extend(fallback_errors)
+        return frame, source, errors
+    except Exception as exc:
+        message = f"Tencent/BaoStock fallback: {type(exc).__name__}: {exc}"
+        errors.append(message[:600])
+        print(f"[FATAL] {message}")
+    raise RuntimeError("No full-market spot source succeeded. " + " | ".join(errors[-6:]))
 
 
 def normalize_history(frame: pd.DataFrame) -> pd.DataFrame:
@@ -289,7 +339,13 @@ def fetch_history(
             if is_rate_limit(exc) and "em" in interface_name:
                 eastmoney_rate_limited = True
                 print("[WARN] Eastmoney history source is rate-limited; skip it for the rest of this run.")
-    raise RuntimeError("All historical sources failed: " + " | ".join(errors[-3:]))
+    try:
+        raw = fetch_baostock_history(symbol, start_date, end_date)
+        return normalize_history(raw), "baostock_query_history_k_data_plus", eastmoney_rate_limited
+    except Exception as exc:
+        errors.append(f"baostock: {type(exc).__name__}: {exc}")
+        print(f"[WARN] {symbol} BaoStock history fallback failed: {type(exc).__name__}: {exc}")
+    raise RuntimeError("All historical sources failed: " + " | ".join(errors[-4:]))
 
 
 def normalize_boards(frame: pd.DataFrame, board_type: str) -> list[dict[str, Any]]:
@@ -464,6 +520,20 @@ def scan(
     errors.extend(board_errors)
 
     market_summary = summarize_market(spot)
+    quote_times = (
+        [str(value) for value in spot["quote_timestamp"].dropna().unique()]
+        if "quote_timestamp" in spot.columns else []
+    )
+    spot_quote_timestamp = max(quote_times) if quote_times else None
+    quote_timestamp_note = (
+        "Tencent quote timestamp is read from the per-security quote payload; "
+        "spot_retrieved_at is the local collection time."
+        if spot_source.startswith("tencent_")
+        else (
+            "AKShare spot endpoints do not guarantee a per-security exchange timestamp; "
+            "spot_retrieved_at is collection time only."
+        )
+    )
     pool, pool_counts = build_history_pool(
         spot, max_history_stocks=max_history_stocks
     )
@@ -504,7 +574,11 @@ def scan(
                 "pct_60d_from_spot": safe_number(row["pct_60d"]),
                 "spot_source": spot_source,
                 "spot_retrieved_at": collected_at.isoformat(timespec="seconds"),
-                "exchange_quote_timestamp": None,
+                "exchange_quote_timestamp": (
+                    str(row["quote_timestamp"])
+                    if "quote_timestamp" in row.index and pd.notna(row["quote_timestamp"])
+                    else None
+                ),
                 "history_source": history_source,
                 "history_latest_completed_bar": (
                     history["date"].iloc[-1].date().isoformat()
@@ -563,13 +637,10 @@ def scan(
         "status": status,
         "collected_at": collected_at.isoformat(timespec="seconds"),
         "timezone": "Asia/Shanghai",
-        "quote_timestamp_note": (
-            "AKShare spot endpoints do not guarantee a per-security exchange timestamp. "
-            "spot_retrieved_at is collection time only."
-        ),
+        "quote_timestamp_note": quote_timestamp_note,
         "market_data": {
             "spot_source": spot_source,
-            "spot_quote_timestamp": None,
+            "spot_quote_timestamp": spot_quote_timestamp,
             "summary": market_summary,
             "industry_board_count": industry_board_count,
             "concept_board_count": concept_board_count,
