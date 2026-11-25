@@ -691,6 +691,10 @@ def scan(
             max(
                 item.get("trend_pullback_score", 0),
                 item.get("bottom_reversal_score", 0),
+                item.get("breakout_start_score", 0),
+                item.get("momentum_continuation_score", 0),
+                item.get("next_day_momentum_score", 0),
+                item.get("oversold_bounce_score", 0),
             ),
             item.get("liquidity_ok", False),
             item.get("average_amount_20d_cny") or 0,
@@ -792,6 +796,30 @@ def scan(
             "bottom_reversal_c_count": int(
                 sum(1 for item in candidates if item.get("bottom_reversal_tier") == "C")
             ),
+            "breakout_start_b_count": int(
+                sum(1 for item in candidates if item.get("breakout_start_tier") == "B")
+            ),
+            "breakout_start_c_count": int(
+                sum(1 for item in candidates if item.get("breakout_start_tier") == "C")
+            ),
+            "momentum_continuation_b_count": int(
+                sum(1 for item in candidates if item.get("momentum_continuation_tier") == "B")
+            ),
+            "momentum_continuation_c_count": int(
+                sum(1 for item in candidates if item.get("momentum_continuation_tier") == "C")
+            ),
+            "next_day_momentum_b_count": int(
+                sum(1 for item in candidates if item.get("next_day_momentum_tier") == "B")
+            ),
+            "next_day_momentum_c_count": int(
+                sum(1 for item in candidates if item.get("next_day_momentum_tier") == "C")
+            ),
+            "oversold_bounce_b_count": int(
+                sum(1 for item in candidates if item.get("oversold_bounce_tier") == "B")
+            ),
+            "oversold_bounce_c_count": int(
+                sum(1 for item in candidates if item.get("oversold_bounce_tier") == "C")
+            ),
             "daily_setup_b_count": int(
                 sum(1 for item in candidates if item.get("daily_setup_tier") == "B")
             ),
@@ -849,7 +877,7 @@ def scan(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Full-market A-share snapshot with parallel trend-pullback and bottom-reversal scans."
+        description="Full-market A-share snapshot with six parallel short-term opportunity scans."
     )
     parser.add_argument("--max-history-stocks", type=int, default=300)
     parser.add_argument("--min-amount-cny", type=float, default=50_000_000)
