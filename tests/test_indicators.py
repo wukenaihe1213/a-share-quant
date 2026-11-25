@@ -152,15 +152,15 @@ class IndicatorTests(unittest.TestCase):
 
     def test_unaffordable_one_lot_is_not_b_tier(self):
         history = self.make_bottom_history()
-        history[["open", "high", "low", "close"]] *= 4
+        history[["open", "high", "low", "close"]] *= 8
         result = calculate_indicators(
             history=history,
-            current_price=41.40,
+            current_price=82.80,
             current_change_pct=1.2,
             current_date=date(2026, 11, 24),
         )
         self.assertFalse(result["affordable"])
-        self.assertGreater(result["one_lot_cost_cny"], 3500)
+        self.assertGreater(result["one_lot_cost_cny"], 7000)
         self.assertNotEqual(result["daily_setup_tier"], "B")
 
     def test_atr14_is_reported_as_volatility_feature(self):
@@ -176,17 +176,29 @@ class IndicatorTests(unittest.TestCase):
 
     def test_position_plan_respects_100_share_lots_cash_and_five_percent_risk(self):
         plan = calculate_position_plan(current_price=12.0)
-        self.assertEqual(plan["budget_per_position_cny"], 3500.0)
+        self.assertEqual(plan["single_position_budget_cap_cny"], 10000.0)
+        self.assertEqual(plan["budget_per_position_cny"], 7000.0)
+        self.assertEqual(plan["budget_if_two_positions_cny"], 3500.0)
         self.assertEqual(plan["lot_size_shares"], 100)
-        self.assertEqual(plan["affordable_shares"], 200)
-        self.assertEqual(plan["estimated_position_value_cny"], 2400.0)
+        self.assertEqual(plan["affordable_shares"], 500)
+        self.assertEqual(plan["affordable_shares_if_two_positions"], 200)
+        self.assertEqual(plan["estimated_position_value_cny"], 6000.0)
         self.assertEqual(plan["max_loss_per_trade_pct"], 5.0)
-        self.assertEqual(plan["estimated_loss_at_max_risk_cny"], 120.0)
-        self.assertEqual(plan["estimated_profit_at_target_min_cny"], 72.0)
-        self.assertEqual(plan["estimated_profit_at_target_max_cny"], 120.0)
+        self.assertEqual(plan["estimated_loss_at_max_risk_cny"], 300.0)
+        self.assertEqual(plan["estimated_profit_at_target_min_cny"], 180.0)
+        self.assertEqual(plan["estimated_profit_at_target_max_cny"], 300.0)
+
+    def test_single_position_can_use_up_to_seven_thousand_after_cash_reserve(self):
+        plan = calculate_position_plan(current_price=60.0)
+        self.assertEqual(plan["budget_per_position_cny"], 7000.0)
+        self.assertEqual(plan["one_lot_cost_cny"], 6000.0)
+        self.assertTrue(plan["affordable"])
+        self.assertFalse(plan["affordable_if_two_positions"])
+        self.assertEqual(plan["affordable_shares"], 100)
+        self.assertEqual(plan["affordable_shares_if_two_positions"], 0)
 
     def test_position_plan_rejects_price_when_one_lot_exceeds_budget(self):
-        plan = calculate_position_plan(current_price=40.0)
+        plan = calculate_position_plan(current_price=80.0)
         self.assertFalse(plan["affordable"])
         self.assertEqual(plan["affordable_shares"], 0)
 
