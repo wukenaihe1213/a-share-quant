@@ -108,3 +108,8 @@ JSON结果会在 risk_management 字段中披露资金规则；每只候选的 r
 - 不要把 GitHub Token、密码、券商账号、个人持仓或交易记录提交到公开仓库。
 - 公开输出只包含公开市场数据和技术指标，不包含个人账户信息。
 - 本项目仅用于个人研究与技术验证，不构成投资建议。数据及时性、准确性和完整性受上游数据源及网络条件影响。
+
+
+## 多数据源故障注入测试
+
+通过 GitHub Actions 中的 **Multi-source failover fault-injection test** 工作流，可主动模拟东方财富、新浪及其他 AKShare 实时快照接口同时失败，随后调用真实腾讯实时行情 + BaoStock 股票列表；同一任务还会模拟 AKShare 历史K线接口失败，再真实请求 BaoStock 历史日K。工作流生成 `multi-source-failover-report` Artifact，记录实际接管数据源、覆盖数量、报价时间和历史K线数量。此测试会对第三方服务发起真实网络请求，耗时可能达到数分钟；它不代表第三方接口具有 SLA。
