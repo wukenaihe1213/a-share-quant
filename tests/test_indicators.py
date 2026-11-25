@@ -98,6 +98,57 @@ class IndicatorTests(unittest.TestCase):
         self.assertEqual(result["candidate_strategy"], "bottom_reversal")
         self.assertFalse(result["buyable"])
 
+
+    def test_breakout_start_uses_prior_20_day_high_and_live_volume_ratio(self):
+        history = self.make_history(70)
+        high_20d = float(history["high"].tail(20).max())
+        current_price = high_20d * 1.01
+        result = calculate_indicators(
+            history=history,
+            current_price=current_price,
+            current_change_pct=2.0,
+            current_date=date(2026, 11, 24),
+            current_volume_ratio=1.6,
+        )
+        self.assertGreater(result["distance_20d_high_pct"], 0)
+        self.assertEqual(result["breakout_start_tier"], "B")
+        self.assertIn("breakout_start", result["candidate_strategies"])
+        self.assertFalse(result["buyable"])
+
+    def test_next_day_momentum_watch_requires_volume_and_avoids_chasing(self):
+        history = self.make_history(70)
+        current_price = float(history["close"].iloc[-1]) * 1.005
+        result = calculate_indicators(
+            history=history,
+            current_price=current_price,
+            current_change_pct=2.5,
+            current_date=date(2026, 11, 24),
+            current_volume_ratio=1.6,
+        )
+        self.assertEqual(result["next_day_momentum_tier"], "B")
+        self.assertTrue(result["next_day_strength_watch"])
+        chased = calculate_indicators(
+            history=history,
+            current_price=current_price * 1.06,
+            current_change_pct=8.0,
+            current_date=date(2026, 11, 24),
+            current_volume_ratio=2.0,
+        )
+        self.assertNotEqual(chased["next_day_momentum_tier"], "B")
+
+    def test_oversold_bounce_is_separate_from_medium_term_bottom_reversal(self):
+        history = self.make_bottom_history()
+        result = calculate_indicators(
+            history=history,
+            current_price=10.40,
+            current_change_pct=2.0,
+            current_date=date(2026, 11, 24),
+            current_volume_ratio=1.5,
+        )
+        self.assertIn(result["oversold_bounce_tier"], ("B", "C"))
+        self.assertIn("oversold_bounce", result["candidate_strategies"])
+        self.assertFalse(result["buyable"])
+
     def test_falling_knife_below_recent_low_is_not_bottom_reversal_candidate(self):
         result = calculate_indicators(
             history=self.make_bottom_history(),
