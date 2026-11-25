@@ -457,9 +457,14 @@ def build_history_pool(
     spot: pd.DataFrame,
     max_history_stocks: int,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Choose a bounded history-scan pool without treating today's partial turnover as 20-day liquidity."""
+    """Build a diversified multi-signal history pool instead of only taking the biggest stocks."""
     pool = spot.copy()
     pool["name"] = pool["name"].fillna("")
+    for column in ("amount", "pct_60d", "change_pct", "volume_ratio", "turnover_pct"):
+        if column not in pool.columns:
+            pool[column] = float("nan")
+        pool[column] = pd.to_numeric(pool[column], errors="coerce")
+
     excluded_st = pool["name"].str.contains(r"ST|退", case=False, regex=True)
     excluded_price = pool["price"].isna() | (pool["price"] <= 0)
     eligible = pool.loc[~(excluded_st | excluded_price)].copy()
@@ -468,23 +473,98 @@ def build_history_pool(
     positive_60d = eligible.loc[
         eligible["pct_60d"].notna() & (eligible["pct_60d"] > 0)
     ]
-    if spot_60d_available:
-        primary = positive_60d.sort_values("amount", ascending=False).head(max_history_stocks)
-        selection_mode = "spot_60d_positive_then_spot_amount_rank"
-    else:
-        # Spot amount is only a ranking hint for the bounded request pool.
-        # The actual 20-day average-turnover requirement is checked later
-        # from completed daily K-lines in calculate_indicators().
-        primary = eligible.sort_values("amount", ascending=False).head(max_history_stocks)
-        selection_mode = "spot_amount_rank_only_no_hard_cutoff"
 
-    if len(primary) < max_history_stocks:
-        remaining = eligible.loc[~eligible["code"].isin(primary["code"])]
-        fill = remaining.sort_values("amount", ascending=False).head(
-            max_history_stocks - len(primary)
-        )
-        primary = pd.concat([primary, fill], ignore_index=True)
+    buckets: dict[str, pd.DataFrame] = {
+        "liquidity": eligible.sort_values("amount", ascending=False),
+        "trend": (
+            positive_60d.sort_values(["pct_60d", "amount"], ascending=[False, False])
+            if not positive_60d.empty
+            else eligible.loc[eligible["change_pct"] > 0].sort_values(
+                ["change_pct", "amount"], ascending=[False, False]
+            )
+        ),
+        "momentum": eligible.loc[
+            eligible["change_pct"].between(0.5, 7.0)
+            & (eligible["volume_ratio"] >= 1.1)
+        ].sort_values(["volume_ratio", "amount"], ascending=[False, False]),
+        "rebound": eligible.loc[
+            (eligible["pct_60d"].isna() | (eligible["pct_60d"] <= 0))
+            & eligible["change_pct"].between(0.5, 6.0)
+            & (eligible["volume_ratio"] >= 1.0)
+        ].sort_values(["volume_ratio", "amount"], ascending=[False, False]),
+        "active": eligible.loc[
+            (eligible["turnover_pct"] >= 1.0)
+            & eligible["change_pct"].between(-2.0, 6.0)
+        ].sort_values(["turnover_pct", "amount"], ascending=[False, False]),
+    }
+    weights = {
+        "liquidity": 0.30,
+        "trend": 0.25,
+        "momentum": 0.20,
+        "rebound": 0.15,
+        "active": 0.10,
+    }
 
+    def board_group(code: Any) -> str:
+        value = str(code).zfill(6)
+        if value.startswith(("300", "301", "302", "303")):
+            return "chinext"
+        if value.startswith(("688", "689")):
+            return "star"
+        if value.startswith(("4", "8", "92")):
+            return "beijing"
+        if value.startswith("6"):
+            return "shanghai"
+        return "shenzhen"
+
+    def interleave_boards(frame: pd.DataFrame) -> list[dict[str, Any]]:
+        if frame.empty:
+            return []
+        work = frame.copy()
+        work["_board_group"] = work["code"].map(board_group)
+        groups = {
+            key: group.drop(columns=["_board_group"]).to_dict("records")
+            for key, group in work.groupby("_board_group", sort=True)
+        }
+        ordered: list[dict[str, Any]] = []
+        while any(groups.values()):
+            for key in sorted(groups):
+                if groups[key]:
+                    ordered.append(groups[key].pop(0))
+        return ordered
+
+    selected_codes: set[str] = set()
+    selected_rows: list[dict[str, Any]] = []
+    bucket_selected: dict[str, int] = {}
+    for bucket_name, weight in weights.items():
+        quota = max(1, int(round(max_history_stocks * weight)))
+        added = 0
+        for row in interleave_boards(buckets[bucket_name]):
+            code = str(row["code"])
+            if code in selected_codes:
+                continue
+            selected_codes.add(code)
+            selected_rows.append(row)
+            added += 1
+            if added >= quota or len(selected_rows) >= max_history_stocks:
+                break
+        bucket_selected[bucket_name] = added
+        if len(selected_rows) >= max_history_stocks:
+            break
+
+    # Fill unused quota or empty signal buckets with the most liquid remaining names.
+    fill_count = 0
+    for row in interleave_boards(buckets["liquidity"]):
+        if len(selected_rows) >= max_history_stocks:
+            break
+        code = str(row["code"])
+        if code in selected_codes:
+            continue
+        selected_codes.add(code)
+        selected_rows.append(row)
+        fill_count += 1
+
+    primary = pd.DataFrame(selected_rows).head(max_history_stocks).reset_index(drop=True)
     counts = {
         "spot_rows": int(len(spot)),
         "excluded_st_or_delisting": int(excluded_st.sum()),
@@ -492,15 +572,17 @@ def build_history_pool(
         "eligible_for_history_scan": int(len(eligible)),
         "spot_60d_available_count": spot_60d_available,
         "positive_60d_in_spot": int(len(positive_60d)) if spot_60d_available else None,
-        "history_pool_selection_mode": selection_mode,
+        "history_pool_selection_mode": "multi_strategy_bucket_union_with_board_interleave",
         "history_pool_size": int(len(primary)),
+        "history_pool_bucket_selected_counts": bucket_selected,
+        "history_pool_liquidity_fill_count": int(fill_count),
     }
-    return primary.reset_index(drop=True), counts
+    return primary, counts
 
 
 def scan(
-    max_history_stocks: int = 120,
-    min_amount_cny: float = 100_000_000,
+    max_history_stocks: int = 300,
+    min_amount_cny: float = 50_000_000,
     delay_seconds: float = 1.0,
     output_candidates: int = 50,
 ) -> dict[str, Any]:
@@ -561,6 +643,9 @@ def scan(
                 current_change_pct=safe_number(row["change_pct"]),
                 current_date=today,
                 average_amount_floor=min_amount_cny,
+                current_volume_ratio=safe_number(row["volume_ratio"]),
+                current_turnover_pct=safe_number(row["turnover_pct"]),
+                current_amount_cny=safe_number(row["amount"]),
             )
             candidates.append({
                 "code": symbol,
@@ -730,9 +815,9 @@ def scan(
         "errors": errors[-30:],
         "limitations": [
             "The full-market spot snapshot is scanned, but detailed daily K-lines are fetched only for the liquidity/trend-prioritized history pool.",
-            "Trend-pullback and bottom-reversal strategies are scored independently; a negative 60-day return is not a hard veto.",
-            "Detailed daily K-lines are calculated for the top-ranked 120-stock history pool by default, not every stock in the 5,000+ spot universe.",
-            "No 14:30 minute-bar confirmation is included yet; all candidates have buyable=false.",
+            "Six independent short-term strategies are scored; a negative 60-day return is not a hard veto for all strategies.",
+            "Detailed daily K-lines are calculated for a diversified 300-stock multi-signal history pool by default, not every stock in the 5,000+ spot universe.",
+            "No 14:25-14:30 minute-bar confirmation is included yet; next-day-strength candidates are watchlist signals only and all candidates have buyable=false.",
             "No precise buy zone or take-profit price is emitted until minute-level confirmation and support validation are implemented.",
             "ATR(14) is used only as a short-term volatility suitability/ranking feature; it is not a prediction of future returns.",
             "B-tier candidates must pass the estimated 100-share affordability check under the configured per-position budget; C-tier candidates may remain unaffordable watch-only names.",
@@ -766,8 +851,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Full-market A-share snapshot with parallel trend-pullback and bottom-reversal scans."
     )
-    parser.add_argument("--max-history-stocks", type=int, default=120)
-    parser.add_argument("--min-amount-cny", type=float, default=100_000_000)
+    parser.add_argument("--max-history-stocks", type=int, default=300)
+    parser.add_argument("--min-amount-cny", type=float, default=50_000_000)
     parser.add_argument("--delay-seconds", type=float, default=1.2)
     parser.add_argument("--output-candidates", type=int, default=50)
     args = parser.parse_args()
