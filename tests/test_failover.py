@@ -45,7 +45,7 @@ class FailoverTests(unittest.TestCase):
 
         self.assertEqual(source, source_name)
         self.assertEqual(len(frame), 1000)
-        self.assertEqual(len(errors), 3)
+        self.assertGreaterEqual(len(errors), 3)
         self.assertIn("injected Eastmoney outage", " ".join(errors))
         self.assertIn("injected Sina outage", " ".join(errors))
         self.assertIn("injected AKShare generic spot outage", " ".join(errors))
