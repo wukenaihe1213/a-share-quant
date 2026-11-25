@@ -1,0 +1,65 @@
+name: Tencent and BaoStock fallback smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_symbols:
+        description: "0 tests the full active A-share universe; set a smaller number for a quick test"
+        required: true
+        default: "0"
+        type: string
+      min_coverage:
+        description: "Minimum quote coverage required for a passing full-universe test"
+        required: true
+        default: "0.60"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tencent-baostock-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Test Tencent live quotes and BaoStock universe
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m src.tencent_smoke_test \
+            --max-symbols "${{ inputs.max_symbols }}" \
+            --min-coverage "${{ inputs.min_coverage }}"
+
+      - name: Upload Tencent smoke-test result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tencent-baostock-smoke-test
+          path: data/tencent_smoke_test.json
+          if-no-files-found: warn
+          retention-days: 14
