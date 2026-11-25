@@ -39,7 +39,7 @@ def parse_tencent_timestamp(value: Any) -> datetime | None:
     return None
 
 
-def is_cn_continuous_trading_time(value: datetime) -> bool:
+def is_cn_continuous_trading_clock_window(value: datetime) -> bool:
     local = value.astimezone(SHANGHAI)
     if local.weekday() >= 5:
         return False
@@ -238,7 +238,7 @@ def fetch_tencent_sample(sample_codes: list[str]) -> tuple[pd.DataFrame, dict[st
     valid_timestamps = [value for value in timestamps if value is not None]
     current = finished
     ages = [(current - value).total_seconds() for value in valid_timestamps]
-    session_open = is_cn_continuous_trading_time(current)
+    session_open = is_cn_continuous_trading_clock_window(current)
     metadata = {
         "source": "tencent_qt_gtimg",
         "status": "ok",
@@ -258,7 +258,8 @@ def fetch_tencent_sample(sample_codes: list[str]) -> tuple[pd.DataFrame, dict[st
         "p95_quote_age_seconds": (
             round(float(pd.Series(ages).quantile(0.95)), 1) if ages else None
         ),
-        "market_continuous_trading_window": session_open,
+        "within_continuous_trading_clock_window": session_open,
+        "trading_day_calendar_checked": False,
         "freshness_status": (
             "fresh"
             if session_open and ages and pd.Series(ages).quantile(0.95) <= 180
@@ -267,7 +268,7 @@ def fetch_tencent_sample(sample_codes: list[str]) -> tuple[pd.DataFrame, dict[st
                 if session_open else "not_evaluated_outside_continuous_trading"
             )
         ),
-        "note": "Tencent provides per-security quote timestamps; compare them with local collection time. Outside continuous trading hours freshness is not graded.",
+        "note": "Tencent provides per-security quote timestamps; compare them with local collection time. The clock-window check does not verify exchange holidays; outside the regular clock window freshness is not graded.",
     }
     return frame, metadata, errors
 
