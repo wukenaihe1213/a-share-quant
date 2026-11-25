@@ -51,6 +51,24 @@ class IndicatorTests(unittest.TestCase):
         )
         self.assertIsNotNone(result["return_60d_pct"])
         self.assertTrue(result["trend_60d_up"])
+        self.assertTrue(result["trend_up"])
+
+    def test_rejects_short_term_rebound_when_60_day_trend_is_down(self):
+        history = self.make_history(70)
+        # Keep the latest 20 sessions rising, but make the 60-session anchor
+        # materially higher so this is a short-term rebound in a wider downtrend.
+        history.loc[:9, ["open", "high", "low", "close"]] *= 2
+        result = calculate_indicators(
+            history=history,
+            current_price=16.0,
+            current_change_pct=0.5,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertGreater(result["return_20d_pct"], 0)
+        self.assertLess(result["return_60d_pct"], 0)
+        self.assertFalse(result["trend_60d_up"])
+        self.assertFalse(result["trend_up"])
+        self.assertFalse(result["watchlist_eligible"])
 
     def test_current_day_bar_is_excluded(self):
         history = self.make_history()
