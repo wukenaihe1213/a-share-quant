@@ -39,6 +39,7 @@ SPOT_ALIASES = {
     "volume_ratio": ("量比", "volume_ratio"),
     "pct_60d": ("60日涨跌幅", "60日涨幅", "pct_60d"),
     "industry": ("行业", "所属行业", "industry"),
+    "quote_timestamp": ("行情时间", "报价时间", "更新时间", "quote_timestamp", "timestamp"),
 }
 HISTORY_ALIASES = {
     "date": ("日期", "时间", "date", "day"),
@@ -191,6 +192,89 @@ def normalize_spot(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def merge_tencent_quote_fields(
+    spot: pd.DataFrame,
+    tencent_quotes: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Fill missing spot metrics from Tencent without replacing primary-source prices."""
+    enriched = spot.copy()
+    for column in ("volume_ratio", "turnover_pct", "volume", "amount"):
+        if column not in enriched.columns:
+            enriched[column] = float("nan")
+        enriched[column] = pd.to_numeric(enriched[column], errors="coerce")
+
+    quote_frame = pd.DataFrame(tencent_quotes)
+    if quote_frame.empty or "code" not in quote_frame.columns:
+        for field in ("volume_ratio", "turnover_pct"):
+            source_col = f"{field}_source"
+            enriched[source_col] = enriched[field].notna().map(
+                lambda available: "akshare_primary" if available else None
+            )
+        enriched["tencent_quote_timestamp"] = None
+        enriched["tencent_quote_available"] = False
+        return enriched, {
+            "status": "unavailable",
+            "source": "tencent_qt_gtimg",
+            "requested_symbols": int(len(enriched)),
+            "returned_symbols": 0,
+            "coverage_pct": 0.0,
+            "volume_ratio_filled": 0,
+            "turnover_pct_filled": 0,
+            "volume_ratio_available_after": int(enriched["volume_ratio"].notna().sum()),
+            "turnover_pct_available_after": int(enriched["turnover_pct"].notna().sum()),
+        }
+
+    quote_frame["code"] = quote_frame["code"].map(clean_code)
+    quote_frame = quote_frame.dropna(subset=["code"]).drop_duplicates("code")
+    quote_map = quote_frame.set_index("code").to_dict("index")
+    spot_codes = enriched["code"].astype(str)
+    matched = spot_codes.isin(quote_map)
+    enriched["tencent_quote_available"] = matched
+    enriched["tencent_quote_timestamp"] = spot_codes.map(
+        lambda code: quote_map.get(code, {}).get("quote_timestamp")
+    )
+    for field in ("price", "change_pct", "amount", "volume", "volume_ratio", "turnover_pct"):
+        enriched[f"tencent_{'amount_cny' if field == 'amount' else field}"] = spot_codes.map(
+            lambda code: quote_map.get(code, {}).get(field)
+        )
+
+    filled_counts: dict[str, int] = {}
+    for field in ("volume_ratio", "turnover_pct", "volume", "amount"):
+        primary_values = pd.to_numeric(enriched[field], errors="coerce")
+        fallback_values = pd.to_numeric(
+            enriched[f"tencent_{'amount_cny' if field == 'amount' else field}"],
+            errors="coerce",
+        )
+        fill_mask = primary_values.isna() & fallback_values.notna()
+        enriched[field] = primary_values.where(~fill_mask, fallback_values)
+        source_col = f"{field}_source"
+        enriched[source_col] = None
+        enriched.loc[primary_values.notna(), source_col] = "akshare_primary"
+        enriched.loc[fill_mask, source_col] = "tencent_qt_gtimg"
+        filled_counts[field] = int(fill_mask.sum())
+
+    returned_count = int(matched.sum())
+    stats = {
+        "status": "ok" if returned_count else "unavailable",
+        "source": "tencent_qt_gtimg",
+        "requested_symbols": int(len(enriched)),
+        "returned_symbols": returned_count,
+        "coverage_pct": round(returned_count / max(len(enriched), 1) * 100, 2),
+        "volume_ratio_filled": filled_counts["volume_ratio"],
+        "turnover_pct_filled": filled_counts["turnover_pct"],
+        "volume_filled": filled_counts["volume"],
+        "amount_filled": filled_counts["amount"],
+        "volume_ratio_available_after": int(enriched["volume_ratio"].notna().sum()),
+        "turnover_pct_available_after": int(enriched["turnover_pct"].notna().sum()),
+        "quote_timestamp_available": int(enriched["tencent_quote_timestamp"].notna().sum()),
+    }
+    if returned_count == 0:
+        stats["status"] = "unavailable"
+    elif returned_count < len(enriched):
+        stats["status"] = "partial"
+    return enriched, stats
+
+
 def fetch_tencent_spot_universe() -> tuple[pd.DataFrame, str, list[str]]:
     """Independent live-quote fallback: BaoStock universe + Tencent quote batches."""
     universe = fetch_baostock_universe()
@@ -208,6 +292,10 @@ def fetch_tencent_spot_universe() -> tuple[pd.DataFrame, str, list[str]]:
     )
     frame["industry"] = None
     frame["pct_60d"] = float("nan")
+    frame["tencent_quote_timestamp"] = frame.get("quote_timestamp")
+    frame["tencent_quote_available"] = True
+    for field in ("volume_ratio", "turnover_pct", "volume", "amount"):
+        frame[f"{field}_source"] = "tencent_qt_gtimg"
     coverage = len(frame) / max(len(universe), 1)
     if len(frame) < 1000 or coverage < 0.60:
         raise RuntimeError(
@@ -596,6 +684,59 @@ def scan(
     spot, spot_source, spot_errors = fetch_spot_universe()
     errors.extend(spot_errors)
     eastmoney_blocked = any("Push2RateLimitError" in item for item in spot_errors)
+
+    tencent_enrichment: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "Primary snapshot already contains volume ratio and turnover rate."
+        if (
+            spot["volume_ratio"].notna().all()
+            and spot["turnover_pct"].notna().all()
+        )
+        else "Primary snapshot already comes from Tencent."
+        if spot_source.startswith("tencent_")
+        else "Tencent supplement has not run.",
+        "source": "tencent_qt_gtimg",
+        "requested_symbols": int(len(spot)),
+        "returned_symbols": 0,
+        "coverage_pct": None,
+        "volume_ratio_filled": 0,
+        "turnover_pct_filled": 0,
+    }
+    missing_ratio = int(spot["volume_ratio"].isna().sum())
+    missing_turnover = int(spot["turnover_pct"].isna().sum())
+    if not spot_source.startswith("tencent_") and (missing_ratio or missing_turnover):
+        try:
+            print(
+                "[INFO] Supplementing missing volume-ratio/turnover fields "
+                f"from Tencent for {len(spot)} A-share symbols."
+            )
+            symbols = [market_code_to_tencent(code) for code in spot["code"].tolist()]
+            tencent_quotes, tencent_errors = fetch_tencent_quotes(
+                symbols, batch_size=80, pause_seconds=0.15
+            )
+            spot, tencent_enrichment = merge_tencent_quote_fields(
+                spot, tencent_quotes
+            )
+            tencent_enrichment["batch_errors"] = tencent_errors[:20]
+            errors.extend(
+                f"Tencent quote supplement: {message}" for message in tencent_errors[:10]
+            )
+            print(
+                "[OK] Tencent quote supplement: "
+                f"{tencent_enrichment['returned_symbols']}/"
+                f"{tencent_enrichment['requested_symbols']} symbols; "
+                f"filled volume_ratio={tencent_enrichment['volume_ratio_filled']}, "
+                f"turnover_pct={tencent_enrichment['turnover_pct_filled']}."
+            )
+        except Exception as exc:
+            tencent_enrichment.update({
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:1000],
+            })
+            errors.append(
+                f"Tencent quote supplement: {type(exc).__name__}: {exc}"[:600]
+            )
+            print(f"[WARN] Tencent quote supplement failed: {type(exc).__name__}: {exc}")
     boards, board_errors = fetch_board_data(
         prefer_sina=eastmoney_blocked or spot_source == "stock_zh_a_spot_sina"
     )
@@ -607,13 +748,23 @@ def scan(
         if "quote_timestamp" in spot.columns else []
     )
     spot_quote_timestamp = max(quote_times) if quote_times else None
+    tencent_quote_times = (
+        [str(value) for value in spot["tencent_quote_timestamp"].dropna().unique()]
+        if "tencent_quote_timestamp" in spot.columns else []
+    )
+    tencent_quote_timestamp_latest = (
+        max(tencent_quote_times) if tencent_quote_times else None
+    )
     quote_timestamp_note = (
         "Tencent quote timestamp is read from the per-security quote payload; "
-        "spot_retrieved_at is the local collection time."
+        "spot_retrieved_at is the local collection time. "
+        "The primary Tencent snapshot supplies both price and technical quote fields."
         if spot_source.startswith("tencent_")
         else (
             "AKShare spot endpoints do not guarantee a per-security exchange timestamp; "
-            "spot_retrieved_at is collection time only."
+            "spot_retrieved_at is collection time only. "
+            "Tencent supplemental metrics retain their own per-security quote timestamp "
+            "and do not replace the primary-source price or daily change."
         )
     )
     pool, pool_counts = build_history_pool(
@@ -656,6 +807,29 @@ def scan(
                 "spot_amount_cny": safe_number(row["amount"]),
                 "spot_turnover_pct": safe_number(row["turnover_pct"]),
                 "spot_volume_ratio": safe_number(row["volume_ratio"]),
+                "spot_volume_ratio_source": (
+                    str(row["volume_ratio_source"])
+                    if "volume_ratio_source" in row.index and pd.notna(row["volume_ratio_source"])
+                    else ("tencent_qt_gtimg" if spot_source.startswith("tencent_") else spot_source)
+                    if safe_number(row["volume_ratio"]) is not None else None
+                ),
+                "spot_turnover_pct_source": (
+                    str(row["turnover_pct_source"])
+                    if "turnover_pct_source" in row.index and pd.notna(row["turnover_pct_source"])
+                    else ("tencent_qt_gtimg" if spot_source.startswith("tencent_") else spot_source)
+                    if safe_number(row["turnover_pct"]) is not None else None
+                ),
+                "tencent_quote_timestamp": (
+                    str(row["tencent_quote_timestamp"])
+                    if "tencent_quote_timestamp" in row.index and pd.notna(row["tencent_quote_timestamp"])
+                    else None
+                ),
+                "tencent_quote_available": (
+                    bool(row["tencent_quote_available"])
+                    if "tencent_quote_available" in row.index else False
+                ),
+                "tencent_quote_price": safe_number(row.get("tencent_price")),
+                "tencent_quote_change_pct": safe_number(row.get("tencent_change_pct")),
                 "pct_60d_from_spot": safe_number(row["pct_60d"]),
                 "spot_source": spot_source,
                 "spot_retrieved_at": collected_at.isoformat(timespec="seconds"),
@@ -730,6 +904,8 @@ def scan(
         "market_data": {
             "spot_source": spot_source,
             "spot_quote_timestamp": spot_quote_timestamp,
+            "tencent_supplemental_quote_timestamp_latest": tencent_quote_timestamp_latest,
+            "tencent_quote_enrichment": tencent_enrichment,
             "summary": market_summary,
             "industry_board_count": industry_board_count,
             "concept_board_count": concept_board_count,
@@ -749,7 +925,15 @@ def scan(
             "min_amount_cny": min_amount_cny,
             "history_request_delay_seconds": delay_seconds,
             "daily_bars_adjustment": "qfq",
-            "strategy_mode": "parallel_trend_pullback_and_bottom_reversal",
+            "strategy_mode": "six_parallel_short_term_strategies",
+            "strategy_names": [
+                "trend_pullback",
+                "bottom_reversal",
+                "breakout_start",
+                "momentum_continuation",
+                "next_day_momentum",
+                "oversold_bounce",
+            ],
             "atr14_suitability_pct_range": [1.2, 6.5],
             "candidate_output_limit": output_candidates,
         },
@@ -850,7 +1034,9 @@ def scan(
             "ATR(14) is used only as a short-term volatility suitability/ranking feature; it is not a prediction of future returns.",
             "B-tier candidates must pass the estimated 100-share affordability check under the configured per-position budget; C-tier candidates may remain unaffordable watch-only names.",
             "The spot endpoint retrieval time is not a guaranteed exchange quote timestamp.",
-            "When Eastmoney is rate-limited, Sina sector data is used as a fallback; sector classifications and names may differ by provider.",
+            "When Eastmoney is rate-limited, Sina spot/sector data is used as a fallback; Tencent supplements missing quote metrics where available.",
+            "Tencent supplemental volume ratio/turnover metrics retain per-security quote timestamps and do not overwrite primary-source prices or daily change.",
+            "A failed or partial Tencent supplement is disclosed in market_data.tencent_quote_enrichment; missing metrics remain null and are not fabricated.",
             "Sector board rankings are market context and are not treated as proof that an individual stock belongs to a strong trend setup.",
         ],
     }
