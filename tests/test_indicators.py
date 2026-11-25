@@ -110,6 +110,30 @@ class IndicatorTests(unittest.TestCase):
         self.assertTrue(result["watchlist_eligible"])
         self.assertFalse(result["buyable"])
 
+    def test_rejects_overheated_runup_from_b_tier(self):
+        history = self.make_history(70)
+        history.loc[60:, ["open", "high", "low", "close"]] *= 1.4
+        ma5 = float(history["close"].tail(5).mean())
+        history.loc[65:69, "high"] = history.loc[65:69, "close"] + 0.05
+        history.loc[68, "high"] = ma5 * 1.05
+        history.loc[67:69, "volume"] = 500
+
+        result = calculate_indicators(
+            history=history,
+            current_price=ma5 * 0.99,
+            current_change_pct=0.5,
+            current_date=date(2026, 11, 24),
+        )
+
+        self.assertGreater(result["runup_10d_pct"], 25)
+        self.assertTrue(result["trend_up"])
+        self.assertTrue(result["pullback_ok"])
+        self.assertTrue(result["volume_shrinking"])
+        self.assertTrue(result["support_near"])
+        self.assertFalse(result["runup_acceptable"])
+        self.assertEqual(result["daily_setup_tier"], "C")
+        self.assertFalse(result["watchlist_eligible"])
+
     def test_current_day_bar_is_excluded(self):
         history = self.make_history()
         current_day = pd.DataFrame([{
