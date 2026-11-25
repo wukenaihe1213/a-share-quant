@@ -165,13 +165,23 @@ def calculate_indicators(
     else:
         missing_conditions.append("当日跌幅过大，暂不参与")
 
+    base_setup = trend_up and liquidity_ok and no_chase and not_crashing
+    runup_acceptable = 5 <= runup_10d <= 25
+    partial_setup_components = sum((
+        runup_acceptable, pullback_ok, volume_shrinking, support_near
+    ))
     core_setup = (
-        trend_up and pullback_ok and volume_shrinking and support_near
-        and liquidity_ok and no_chase and not_crashing
+        base_setup and pullback_ok and volume_shrinking and support_near
     )
 
-    # Phase 3 has no minute-bar confirmation; it cannot mark A/buyable.
-    tier = "B" if core_setup and score >= 70 else "C"
+    # B means the medium-term trend/liquidity gates pass and most daily
+    # structure signals are present. Minute-bar confirmation is still absent,
+    # so this phase must never label a candidate A or buyable.
+    tier = (
+        "B"
+        if base_setup and score >= 60 and partial_setup_components >= 2
+        else "C"
+    )
 
     return {
         "return_5d_pct": round(return_5d, 2),
@@ -195,6 +205,8 @@ def calculate_indicators(
         "average_amount_20d_cny": round(average_amount_20d, 2),
         "trend_up": bool(trend_up),
         "runup_preferred": bool(runup_preferred),
+        "runup_acceptable": bool(runup_acceptable),
+        "partial_setup_components": int(partial_setup_components),
         "pullback_ok": bool(pullback_ok),
         "volume_shrinking": bool(volume_shrinking),
         "support_near": bool(support_near),
@@ -202,7 +214,7 @@ def calculate_indicators(
         "no_chase": bool(no_chase),
         "score": int(score),
         "daily_setup_tier": tier,
-        "watchlist_eligible": bool(core_setup and score >= 70),
+        "watchlist_eligible": bool(tier == "B"),
         "intraday_confirmation": "not_checked",
         "buyable": False,
         "buy_zone": None,
