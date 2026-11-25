@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from src.quote_crosscheck import (
+    choose_universe_sample_codes,
     classify_price_difference,
     compare_pair,
     parse_tencent_timestamp,
@@ -44,6 +45,23 @@ class QuoteCrosscheckTests(unittest.TestCase):
             "normal",
         )
         self.assertIn("amount_diff_pct", details.columns)
+
+
+    def test_baostock_universe_fallback_selects_stratified_codes(self):
+        universe = pd.DataFrame({
+            "code": (
+                [f"0{i:05d}" for i in range(1, 61)]
+                + [f"6{i:05d}" for i in range(1, 61)]
+                + [f"8{i:05d}" for i in range(1, 61)]
+            ),
+            "name": ["Stock"] * 180,
+        })
+        selected = choose_universe_sample_codes(universe, sample_size=90)
+        self.assertEqual(len(selected), 90)
+        self.assertTrue(any(code.startswith("0") for code in selected))
+        self.assertTrue(any(code.startswith("6") for code in selected))
+        self.assertTrue(any(code.startswith("8") for code in selected))
+        self.assertEqual(len(set(selected)), 90)
 
     def test_tencent_timestamp_parser(self):
         parsed = parse_tencent_timestamp("20261125143000")
