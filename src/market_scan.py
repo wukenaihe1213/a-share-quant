@@ -420,12 +420,14 @@ def build_history_pool(
         )
         primary = pd.concat([primary, fill], ignore_index=True)
 
+    spot_60d_available = int(eligible["pct_60d"].notna().sum())
     counts = {
         "spot_rows": int(len(spot)),
         "excluded_st_or_delisting": int(excluded_st.sum()),
         "excluded_low_amount": int(excluded_amount.sum()),
         "eligible_by_liquidity": int(len(eligible)),
-        "positive_60d_in_spot": int(len(positive_60d)),
+        "spot_60d_available_count": spot_60d_available,
+        "positive_60d_in_spot": int(len(positive_60d)) if spot_60d_available else None,
         "history_pool_size": int(len(primary)),
     }
     return primary.reset_index(drop=True), counts
