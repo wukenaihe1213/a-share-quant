@@ -401,7 +401,7 @@ def build_history_pool(
     spot: pd.DataFrame,
     max_history_stocks: int,
     min_amount_cny: float,
-) -> tuple[pd.DataFrame, dict[str, int]]:
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     pool = spot.copy()
     pool["name"] = pool["name"].fillna("")
     excluded_st = pool["name"].str.contains(r"ST|退", case=False, regex=True)
@@ -428,6 +428,10 @@ def build_history_pool(
         "eligible_by_liquidity": int(len(eligible)),
         "spot_60d_available_count": spot_60d_available,
         "positive_60d_in_spot": int(len(positive_60d)) if spot_60d_available else None,
+        "history_pool_selection_mode": (
+            "spot_60d_positive_then_liquidity"
+            if spot_60d_available else "liquidity_only_spot_60d_unavailable"
+        ),
         "history_pool_size": int(len(primary)),
     }
     return primary.reset_index(drop=True), counts
