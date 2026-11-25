@@ -1,0 +1,61 @@
+name: Live quote cross-source validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_size:
+        description: "Number of liquid A-share symbols to compare across providers"
+        required: true
+        default: "150"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a-share-quote-crosscheck
+  cancel-in-progress: false
+
+jobs:
+  quote-crosscheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Compare Eastmoney, Sina and Tencent live quotes
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m src.quote_crosscheck --sample-size "${{ inputs.sample_size }}"
+
+      - name: Upload quote comparison report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-quote-crosscheck
+          path: |
+            data/quote_crosscheck.json
+            data/quote_crosscheck_details.csv
+            data/quote_crosscheck_pairs.csv
+          if-no-files-found: warn
+          retention-days: 14
