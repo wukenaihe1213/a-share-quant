@@ -11,6 +11,7 @@ def calculate_position_plan(
     account_capital_cny: float = 10_000.0,
     cash_reserve_pct: float = 30.0,
     max_positions: int = 2,
+    single_position_budget_cap_cny: float = 10_000.0,
     max_loss_per_trade_pct: float = 5.0,
     target_profit_min_pct: float = 3.0,
     target_profit_max_pct: float = 5.0,
@@ -21,27 +22,42 @@ def calculate_position_plan(
         raise ValueError("current_price must be a positive number")
     if account_capital_cny <= 0 or max_positions < 1 or lot_size < 1:
         raise ValueError("Capital, max_positions and lot_size must be positive")
+    if single_position_budget_cap_cny <= 0:
+        raise ValueError("single_position_budget_cap_cny must be positive")
     if not 0 <= cash_reserve_pct < 100:
         raise ValueError("cash_reserve_pct must be in [0, 100)")
     if not 0 < max_loss_per_trade_pct <= 100:
         raise ValueError("max_loss_per_trade_pct must be in (0, 100]")
 
     investable_capital = account_capital_cny * (1 - cash_reserve_pct / 100)
-    per_position_budget = investable_capital / max_positions
+    # Single-position scenario: the position may use the available investment
+    # capital, subject to the user's per-stock ceiling. If two positions are
+    # held simultaneously, the illustrative equal-split budget is shown too.
+    per_position_budget = min(single_position_budget_cap_cny, investable_capital)
+    two_position_budget = investable_capital / max_positions
     one_lot_cost = current_price * lot_size
     lots = int((per_position_budget + 1e-9) / one_lot_cost)
     shares = lots * lot_size
+    two_position_lots = int((two_position_budget + 1e-9) / one_lot_cost)
+    shares_if_two_positions = two_position_lots * lot_size
     position_value = shares * current_price
 
     return {
         "account_capital_cny": round(account_capital_cny, 2),
         "cash_reserve_pct": round(cash_reserve_pct, 2),
         "max_positions": int(max_positions),
+        "single_position_budget_cap_cny": round(single_position_budget_cap_cny, 2),
+        "investable_capital_after_cash_reserve_cny": round(investable_capital, 2),
         "budget_per_position_cny": round(per_position_budget, 2),
+        "budget_if_two_positions_cny": round(two_position_budget, 2),
         "lot_size_shares": int(lot_size),
         "one_lot_cost_cny": round(one_lot_cost, 2),
         "affordable_shares": int(shares),
+        "affordable_shares_if_two_positions": int(shares_if_two_positions),
         "estimated_position_value_cny": round(position_value, 2),
+        "estimated_position_value_if_two_positions_cny": round(
+            shares_if_two_positions * current_price, 2
+        ),
         "max_loss_per_trade_pct": round(max_loss_per_trade_pct, 2),
         "estimated_loss_at_max_risk_cny": round(
             position_value * max_loss_per_trade_pct / 100, 2
@@ -53,6 +69,7 @@ def calculate_position_plan(
             position_value * target_profit_max_pct / 100, 2
         ),
         "affordable": bool(shares >= lot_size),
+        "affordable_if_two_positions": bool(shares_if_two_positions >= lot_size),
         "fees_included": False,
         "note": (
             "Illustrative sizing only; actual fill price, fees, slippage and gap risk "
@@ -70,6 +87,7 @@ def calculate_indicators(
     account_capital_cny: float = 10_000.0,
     cash_reserve_pct: float = 30.0,
     max_positions: int = 2,
+    single_position_budget_cap_cny: float = 10_000.0,
     max_loss_per_trade_pct: float = 5.0,
 ) -> dict[str, Any]:
     """Score trend-pullback and bottom-reversal setups independently.
@@ -166,9 +184,13 @@ def calculate_indicators(
     atr_suitable = bool(atr_pct is not None and 1.2 <= atr_pct <= 6.5)
 
     investable_capital = account_capital_cny * (1 - cash_reserve_pct / 100)
-    budget_per_position = investable_capital / max_positions
+    budget_per_position = min(single_position_budget_cap_cny, investable_capital)
+    budget_if_two_positions = investable_capital / max_positions
     one_lot_cost = current_price * 100
     affordable = bool(one_lot_cost <= budget_per_position + 1e-9)
+    affordable_if_two_positions = bool(
+        one_lot_cost <= budget_if_two_positions + 1e-9
+    )
 
     ma_values = {"MA5": ma5, "MA10": ma10, "MA20": ma20}
     support_distances = {
@@ -292,7 +314,7 @@ def calculate_indicators(
         trend_missing.append("ATR波动率偏低或偏高，短线空间/风险不理想")
 
     if not affordable:
-        trend_missing.append("100股一手超过单只3500元预算")
+        trend_missing.append("100股一手超过单只可用预算（账户预留现金后，单只上限不超过10000元）")
 
     # B tier requires a real 2-5 day pullback and at least one additional
     # confirmation (shrinking volume or nearby support). No-pullback leaders
@@ -423,7 +445,7 @@ def calculate_indicators(
     if not bottom_repair:
         bottom_missing.append("尚未站回MA5附近或MA5未出现企稳迹象")
     if not affordable:
-        bottom_missing.append("100股一手超过单只3500元预算")
+        bottom_missing.append("100股一手超过单只可用预算（账户预留现金后，单只上限不超过10000元）")
 
     bottom_base_ok = (
         prior_decline and near_bottom_zone and base_holds_20d_low
@@ -539,7 +561,11 @@ def calculate_indicators(
         "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
         "atr_suitable": bool(atr_suitable),
         "one_lot_cost_cny": round(one_lot_cost, 2),
+        "single_position_budget_cap_cny": round(single_position_budget_cap_cny, 2),
+        "budget_per_position_cny": round(budget_per_position, 2),
+        "budget_if_two_positions_cny": round(budget_if_two_positions, 2),
         "affordable": bool(affordable),
+        "affordable_if_two_positions": bool(affordable_if_two_positions),
         "bottom_repair": bool(bottom_repair),
         "bottom_severe_decline": bool(severe_decline),
         "trend_up": trend_up,
