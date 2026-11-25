@@ -443,7 +443,7 @@ def build_history_pool(
 
 
 def scan(
-    max_history_stocks: int = 80,
+    max_history_stocks: int = 120,
     min_amount_cny: float = 100_000_000,
     delay_seconds: float = 1.0,
     output_candidates: int = 50,
@@ -522,13 +522,16 @@ def scan(
                 print("[WARN] Rate limit detected. Stop further history requests to protect the source.")
                 break
 
+    tier_rank = {"B": 2, "C": 1, "N": 0}
     candidates.sort(
         key=lambda item: (
-            item.get("daily_setup_tier") == "B",
-            item.get("no_chase", False),
-            item.get("trend_up", False),
-            item.get("pullback_ok", False),
-            item["score"],
+            tier_rank.get(item.get("daily_setup_tier"), 0),
+            item.get("score", 0),
+            max(
+                item.get("trend_pullback_score", 0),
+                item.get("bottom_reversal_score", 0),
+            ),
+            item.get("liquidity_ok", False),
             item.get("average_amount_20d_cny") or 0,
         ),
         reverse=True,
@@ -584,7 +587,23 @@ def scan(
             "min_amount_cny": min_amount_cny,
             "history_request_delay_seconds": delay_seconds,
             "daily_bars_adjustment": "qfq",
+            "strategy_mode": "parallel_trend_pullback_and_bottom_reversal",
             "candidate_output_limit": output_candidates,
+        },
+        "risk_management": {
+            "account_capital_cny": 10000,
+            "cash_reserve_pct": 30,
+            "max_positions": 2,
+            "max_position_budget_cny": 3500,
+            "max_loss_per_trade_pct": 5,
+            "take_profit_observation_range_pct": [3, 5],
+            "max_holding_trading_days": 10,
+            "a_share_lot_size": 100,
+            "risk_note": (
+                "5% is the planned maximum loss relative to each position's entry value, "
+                "not a guaranteed execution price or 5% of total account capital. "
+                "Gap risk, slippage and fees can increase actual losses."
+            ),
         },
         "coverage": {
             **pool_counts,
@@ -600,18 +619,32 @@ def scan(
             "history_positive_60d": int(
                 sum(1 for item in candidates if (item.get("return_60d_pct") or 0) > 0)
             ),
+            "trend_pullback_b_count": int(
+                sum(1 for item in candidates if item.get("trend_pullback_tier") == "B")
+            ),
+            "bottom_reversal_b_count": int(
+                sum(1 for item in candidates if item.get("bottom_reversal_tier") == "B")
+            ),
+            "bottom_reversal_c_count": int(
+                sum(1 for item in candidates if item.get("bottom_reversal_tier") == "C")
+            ),
             "daily_setup_b_count": int(
                 sum(1 for item in candidates if item.get("daily_setup_tier") == "B")
             ),
             "daily_setup_c_count": int(
                 sum(1 for item in candidates if item.get("daily_setup_tier") == "C")
             ),
+            "daily_setup_n_count": int(
+                sum(1 for item in candidates if item.get("daily_setup_tier") == "N")
+            ),
         },
         "candidates": candidates[:output_candidates],
         "errors": errors[-30:],
         "limitations": [
             "The full-market spot snapshot is scanned, but detailed daily K-lines are fetched only for the liquidity/trend-prioritized history pool.",
-            "No 14:30 minute-bar confirmation is included in Phase 3; all candidates have buyable=false.",
+            "Trend-pullback and bottom-reversal strategies are scored independently; a negative 60-day return is not a hard veto.",
+            "Detailed daily K-lines are calculated for the top-ranked 120-stock history pool by default, not every stock in the 5,000+ spot universe.",
+            "No 14:30 minute-bar confirmation is included yet; all candidates have buyable=false.",
             "No precise buy zone or take-profit price is emitted until minute-level confirmation and support validation are implemented.",
             "The spot endpoint retrieval time is not a guaranteed exchange quote timestamp.",
             "When Eastmoney is rate-limited, Sina sector data is used as a fallback; sector classifications and names may differ by provider.",
@@ -641,9 +674,9 @@ def scan(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Full-market A-share snapshot and trend/pullback indicator scan."
+        description="Full-market A-share snapshot with parallel trend-pullback and bottom-reversal scans."
     )
-    parser.add_argument("--max-history-stocks", type=int, default=80)
+    parser.add_argument("--max-history-stocks", type=int, default=120)
     parser.add_argument("--min-amount-cny", type=float, default=100_000_000)
     parser.add_argument("--delay-seconds", type=float, default=1.2)
     parser.add_argument("--output-candidates", type=int, default=50)
