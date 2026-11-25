@@ -92,7 +92,9 @@ def calculate_indicators(
         (ma20 / ma20_previous - 1) * 100 if ma20_previous > 0 else None
     )
     trend_up = (
-        return_20d > 0
+        return_60d is not None
+        and return_60d > 0
+        and return_20d > 0
         and ma20_slope_pct is not None
         and ma20_slope_pct > 0
         and current_price >= ma20 * 0.98
@@ -112,9 +114,9 @@ def calculate_indicators(
 
     if trend_up:
         score += 20
-        reasons.append("20日趋势向上且MA20斜率为正")
+        reasons.append("60日、20日趋势向上且MA20斜率为正")
     else:
-        missing_conditions.append("20日趋势或MA20斜率未确认")
+        missing_conditions.append("60日/20日趋势或MA20斜率未确认")
 
     if runup_preferred:
         score += 15
