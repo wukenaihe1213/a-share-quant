@@ -526,6 +526,8 @@ def scan(
     candidates.sort(
         key=lambda item: (
             tier_rank.get(item.get("daily_setup_tier"), 0),
+            item.get("affordable", False),
+            item.get("atr_suitable", False),
             item.get("score", 0),
             max(
                 item.get("trend_pullback_score", 0),
@@ -588,6 +590,7 @@ def scan(
             "history_request_delay_seconds": delay_seconds,
             "daily_bars_adjustment": "qfq",
             "strategy_mode": "parallel_trend_pullback_and_bottom_reversal",
+            "atr14_suitability_pct_range": [1.2, 6.5],
             "candidate_output_limit": output_candidates,
         },
         "risk_management": {
@@ -640,6 +643,15 @@ def scan(
             "daily_setup_n_count": int(
                 sum(1 for item in candidates if item.get("daily_setup_tier") == "N")
             ),
+            "affordable_candidate_count": int(
+                sum(1 for item in candidates if item.get("affordable", False))
+            ),
+            "atr_suitable_candidate_count": int(
+                sum(1 for item in candidates if item.get("atr_suitable", False))
+            ),
+            "bottom_severe_decline_count": int(
+                sum(1 for item in candidates if item.get("bottom_severe_decline", False))
+            ),
         },
         "candidates": candidates[:output_candidates],
         "errors": errors[-30:],
@@ -649,6 +661,8 @@ def scan(
             "Detailed daily K-lines are calculated for the top-ranked 120-stock history pool by default, not every stock in the 5,000+ spot universe.",
             "No 14:30 minute-bar confirmation is included yet; all candidates have buyable=false.",
             "No precise buy zone or take-profit price is emitted until minute-level confirmation and support validation are implemented.",
+            "ATR(14) is used only as a short-term volatility suitability/ranking feature; it is not a prediction of future returns.",
+            "B-tier candidates must pass the estimated 100-share affordability check under the configured per-position budget; C-tier candidates may remain unaffordable watch-only names.",
             "The spot endpoint retrieval time is not a guaranteed exchange quote timestamp.",
             "When Eastmoney is rate-limited, Sina sector data is used as a fallback; sector classifications and names may differ by provider.",
             "Sector board rankings are market context and are not treated as proof that an individual stock belongs to a strong trend setup.",
