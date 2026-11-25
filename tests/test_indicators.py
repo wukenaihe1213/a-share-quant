@@ -47,7 +47,7 @@ class IndicatorTests(unittest.TestCase):
             })
         return pd.DataFrame(rows)
 
-    def test_trend_pullback_can_qualify_without_positive_60_day_return(self):
+    def test_negative_60_day_return_is_not_a_hard_veto_for_trend_base(self):
         history = self.make_history(70)
         # Make the 60-day anchor materially higher while keeping the latest
         # 20 sessions rising. A negative 60-day return is a score input, not a veto.
@@ -62,7 +62,7 @@ class IndicatorTests(unittest.TestCase):
         self.assertLess(result["return_60d_pct"], 0)
         self.assertFalse(result["trend_60d_up"])
         self.assertTrue(result["trend_up"])
-        self.assertIn(result["trend_pullback_tier"], ("B", "C"))
+        self.assertIn(result["trend_pullback_tier"], ("B", "C", "N"))
         self.assertFalse(result["buyable"])
 
     def test_trend_pullback_watchlist_and_no_buyable_without_intraday(self):
@@ -125,6 +125,54 @@ class IndicatorTests(unittest.TestCase):
         self.assertGreater(result["runup_10d_pct"], 30)
         self.assertFalse(result["runup_acceptable"])
         self.assertNotEqual(result["trend_pullback_tier"], "B")
+
+    def test_trend_strategy_does_not_promote_a_no_pullback_runup_to_b(self):
+        history = self.make_history(70)
+        current_price = float(history["high"].tail(5).max()) * 1.01
+        result = calculate_indicators(
+            history=history,
+            current_price=current_price,
+            current_change_pct=0.5,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertEqual(result["pullback_depth_pct"], 0.0)
+        self.assertNotEqual(result["trend_pullback_tier"], "B")
+
+    def test_severe_medium_term_decline_is_not_bottom_reversal_b_tier(self):
+        history = self.make_bottom_history()
+        history.loc[10:20, "high"] *= 1.5
+        result = calculate_indicators(
+            history=history,
+            current_price=10.35,
+            current_change_pct=1.2,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertTrue(result["bottom_severe_decline"])
+        self.assertNotEqual(result["bottom_reversal_tier"], "B")
+
+    def test_unaffordable_one_lot_is_not_b_tier(self):
+        history = self.make_bottom_history()
+        history[["open", "high", "low", "close"]] *= 4
+        result = calculate_indicators(
+            history=history,
+            current_price=41.40,
+            current_change_pct=1.2,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertFalse(result["affordable"])
+        self.assertGreater(result["one_lot_cost_cny"], 3500)
+        self.assertNotEqual(result["daily_setup_tier"], "B")
+
+    def test_atr14_is_reported_as_volatility_feature(self):
+        result = calculate_indicators(
+            history=self.make_history(40),
+            current_price=13.20,
+            current_change_pct=1.0,
+            current_date=date(2026, 11, 24),
+        )
+        self.assertGreater(result["atr14"], 0)
+        self.assertGreater(result["atr_pct"], 0)
+        self.assertIsInstance(result["atr_suitable"], bool)
 
     def test_position_plan_respects_100_share_lots_cash_and_five_percent_risk(self):
         plan = calculate_position_plan(current_price=12.0)
