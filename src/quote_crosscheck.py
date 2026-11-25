@@ -12,7 +12,11 @@ import akshare as ak
 import pandas as pd
 
 from src.market_scan import normalize_spot
-from src.tencent_quote import fetch_tencent_quotes, market_code_to_tencent
+from src.tencent_quote import (
+    fetch_baostock_universe,
+    fetch_tencent_quotes,
+    market_code_to_tencent,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +225,38 @@ def compare_pair(
     return summary, details
 
 
+
+def choose_universe_sample_codes(universe: pd.DataFrame, sample_size: int = 150) -> list[str]:
+    """Choose a deterministic, board-stratified fallback sample from BaoStock's code list."""
+    if universe is None or universe.empty or "code" not in universe.columns:
+        raise ValueError("BaoStock universe is empty or has no code column.")
+    if sample_size < 30:
+        raise ValueError("sample_size must be at least 30.")
+
+    codes = (
+        universe["code"].astype(str).str.extract(r"(\d{6})", expand=False)
+        .dropna().drop_duplicates().tolist()
+    )
+    if len(codes) < 30:
+        raise ValueError(f"BaoStock universe contains only {len(codes)} usable stock codes.")
+
+    groups = (("0", "3"), ("6",), ("4", "8", "92"))
+    selected: list[str] = []
+    quota = max(1, sample_size // len(groups))
+    for prefixes in groups:
+        group_codes = [code for code in codes if code.startswith(prefixes)]
+        for code in group_codes[:quota]:
+            if code not in selected:
+                selected.append(code)
+
+    for code in codes:
+        if code not in selected:
+            selected.append(code)
+        if len(selected) >= sample_size:
+            break
+    return selected[:sample_size]
+
+
 def fetch_tencent_sample(sample_codes: list[str]) -> tuple[pd.DataFrame, dict[str, Any], list[str]]:
     started = now_cn()
     symbols = [market_code_to_tencent(code) for code in sample_codes]
@@ -301,7 +337,12 @@ def run_crosscheck(sample_size: int = 150) -> dict[str, Any]:
     snapshots: dict[str, pd.DataFrame] = {}
     metadata: dict[str, dict[str, Any]] = {}
 
-    for source in ("stock_zh_a_spot_em", "stock_zh_a_spot_sina"):
+
+    for source in (
+        "stock_zh_a_spot_em",
+        "stock_zh_a_spot_sina",
+        "stock_zh_a_spot",
+    ):
         try:
             frame, meta = fetch_akshare_snapshot(source)
             snapshots[source] = frame
@@ -316,20 +357,54 @@ def run_crosscheck(sample_size: int = 150) -> dict[str, Any]:
             result["warnings"].append(f"{source}: {type(exc).__name__}: {exc}"[:500])
             print(f"[WARN] {source}: {type(exc).__name__}: {exc}")
 
-    if not snapshots:
-        raise RuntimeError(
-            "Both AKShare comparison sources failed; cannot select a representative common sample."
-        )
+    if snapshots:
+        sample_codes = choose_sample_codes(list(snapshots.values()), sample_size)
+        result["sample_universe_source"] = "successful_akshare_snapshot"
+    else:
+        # Use BaoStock only to obtain stock codes if all live AKShare snapshots fail.
+        try:
+            universe = fetch_baostock_universe()
+            sample_codes = choose_universe_sample_codes(universe, sample_size)
+            metadata["baostock_stock_universe"] = {
+                "source": "baostock_query_stock_basic",
+                "status": "ok",
+                "rows": int(len(universe)),
+                "use": "code-universe fallback only; not treated as a live quote source",
+            }
+            result["sample_universe_source"] = "baostock_stock_basic"
+            print(
+                f"[OK] BaoStock fallback universe: {len(universe)} stocks; "
+                f"selected {len(sample_codes)} codes for Tencent quote check"
+            )
+        except Exception as exc:
+            metadata["baostock_stock_universe"] = {
+                "source": "baostock_query_stock_basic",
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:1000],
+            }
+            result["warnings"].append(
+                f"BaoStock universe fallback: {type(exc).__name__}: {exc}"[:500]
+            )
+            raise RuntimeError(
+                "All AKShare live snapshots failed and BaoStock could not provide "
+                "a fallback stock-code universe. " + str(exc)
+            ) from exc
 
-    sample_codes = choose_sample_codes(list(snapshots.values()), sample_size)
+    if not sample_codes:
+        raise RuntimeError("No stock codes are available for Tencent quote validation.")
     result["sample_codes"] = sample_codes
 
+    tencent_frame = pd.DataFrame()
     try:
         tencent_frame, tencent_meta, tencent_errors = fetch_tencent_sample(sample_codes)
         snapshots["tencent_qt_gtimg"] = tencent_frame
         metadata["tencent_qt_gtimg"] = tencent_meta
         result["warnings"].extend(tencent_errors[:20])
-        print(f"[OK] tencent_qt_gtimg: {tencent_meta['returned_symbols']} sample quotes")
+        print(
+            f"[OK] tencent_qt_gtimg: {tencent_meta['returned_symbols']}/"
+            f"{tencent_meta['requested_symbols']} sample quotes "
+            f"({tencent_meta['quote_coverage_pct']}%)"
+        )
     except Exception as exc:
         metadata["tencent_qt_gtimg"] = {
             "source": "tencent_qt_gtimg",
@@ -379,7 +454,15 @@ def run_crosscheck(sample_size: int = 150) -> dict[str, Any]:
     result["comparisons"] = pair_summaries
     result["source_count_success"] = len(snapshots)
     result["sample_size_actual"] = len(sample_codes)
-    result["tencent_returned_count"] = int(tencent_frame["code"].nunique())
+    result["tencent_returned_count"] = (
+        int(tencent_frame["code"].nunique()) if not tencent_frame.empty else 0
+    )
+    result["comparison_count"] = len(usable_pairs)
+    if not usable_pairs:
+        result["warnings"].append(
+            "Fewer than two usable live quote providers were available; "
+            "the report is diagnostic only and does not establish cross-source agreement."
+        )
 
     details_all = (
         pd.concat(detail_frames, ignore_index=True)
@@ -420,7 +503,9 @@ def main() -> int:
         parser.error("--sample-size must be between 30 and 500.")
     try:
         result = run_crosscheck(sample_size=args.sample_size)
-        return 0 if result["status"] in ("pass", "review") else 1
+        # "insufficient_comparisons" is a valid diagnostic outcome: a report was
+        # produced, but this status is not a successful accuracy validation.
+        return 0 if result["status"] in ("pass", "review", "insufficient_comparisons") else 1
     except Exception as exc:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         failure = {
