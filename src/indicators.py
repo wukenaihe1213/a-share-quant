@@ -83,18 +83,20 @@ def calculate_indicators(
     current_price: float,
     current_change_pct: float | None,
     current_date: date,
-    average_amount_floor: float = 100_000_000,
+    average_amount_floor: float = 50_000_000,
     account_capital_cny: float = 10_000.0,
     cash_reserve_pct: float = 30.0,
     max_positions: int = 2,
     single_position_budget_cap_cny: float = 10_000.0,
     max_loss_per_trade_pct: float = 5.0,
+    current_volume_ratio: float | None = None,
+    current_turnover_pct: float | None = None,
+    current_amount_cny: float | None = None,
 ) -> dict[str, Any]:
-    """Score trend-pullback and bottom-reversal setups independently.
+    """Score six independent short-term setups using completed daily bars + live snapshot.
 
-    All moving-average, price-range and volume indicators use completed daily bars.
-    The current spot quote is used only as the latest price/change snapshot. Neither
-    strategy can create a buyable signal until intraday confirmation is implemented.
+    Signals are research/watchlist scores, not forecasts or executable buy orders.
+    Intraday minute-bar confirmation is not implemented, so buyable remains false.
     """
     required = {"date", "high", "low", "close", "volume", "amount"}
     missing = required.difference(history.columns)
@@ -121,6 +123,31 @@ def calculate_indicators(
     volume = frame["volume"]
     amount = frame["amount"]
 
+    try:
+        current_volume_ratio = (
+            float(current_volume_ratio)
+            if current_volume_ratio is not None and pd.notna(current_volume_ratio)
+            else None
+        )
+    except (TypeError, ValueError):
+        current_volume_ratio = None
+    try:
+        current_turnover_pct = (
+            float(current_turnover_pct)
+            if current_turnover_pct is not None and pd.notna(current_turnover_pct)
+            else None
+        )
+    except (TypeError, ValueError):
+        current_turnover_pct = None
+    try:
+        current_amount_cny = (
+            float(current_amount_cny)
+            if current_amount_cny is not None and pd.notna(current_amount_cny)
+            else None
+        )
+    except (TypeError, ValueError):
+        current_amount_cny = None
+
     ma5 = float(close.tail(5).mean())
     ma10 = float(close.tail(10).mean())
     ma20 = float(close.tail(20).mean())
@@ -145,6 +172,8 @@ def calculate_indicators(
     pullback_depth = max(0.0, -pullback_pct)
 
     low_20d = float(low.tail(20).min())
+    high_20d = float(high.tail(20).max())
+    distance_20d_high = (current_price / high_20d - 1) * 100 if high_20d > 0 else None
     high_60d = float(high.tail(60).max()) if len(frame) >= 60 else None
     low_60d = float(low.tail(60).min()) if len(frame) >= 60 else None
     distance_20d_low = (current_price / low_20d - 1) * 100 if low_20d > 0 else None
@@ -471,13 +500,268 @@ def calculate_indicators(
     else:
         bottom_tier = "N"
 
+
+    # Strategy C: breakout from a completed 20-day range with live volume support.
+    daily_change = (
+        float(current_change_pct)
+        if current_change_pct is not None and pd.notna(current_change_pct)
+        else None
+    )
+    volume_ratio_ok = current_volume_ratio is not None
+    breakout_near = bool(
+        distance_20d_high is not None and distance_20d_high >= -0.5
+    )
+    breakout_confirmed = bool(
+        distance_20d_high is not None and distance_20d_high >= 0.2
+    )
+    breakout_score = 0
+    breakout_reasons: list[str] = []
+    breakout_missing: list[str] = []
+    if breakout_confirmed:
+        breakout_score += 25
+        breakout_reasons.append("现价有效突破此前20日高点")
+    elif breakout_near:
+        breakout_score += 15
+        breakout_reasons.append("现价接近此前20日高点，等待突破确认")
+    else:
+        breakout_missing.append("尚未接近20日区间上沿")
+    if daily_change is not None and 0.5 <= daily_change <= 5.5:
+        breakout_score += 15
+        breakout_reasons.append("当日涨幅适中，暂未明显追高")
+    else:
+        breakout_missing.append("当日涨幅不在突破观察区间")
+    if current_volume_ratio is not None and 1.2 <= current_volume_ratio <= 3.5:
+        breakout_score += 20
+        breakout_reasons.append("量比显示成交活跃")
+    elif current_volume_ratio is not None and 1.0 <= current_volume_ratio < 1.2:
+        breakout_score += 8
+        breakout_missing.append("量能略有改善但确认不足")
+    else:
+        breakout_missing.append("缺少有效量能确认或量比数据")
+    if return_5d >= 2:
+        breakout_score += 10
+    if return_10d >= 4:
+        breakout_score += 10
+    if liquidity_ok:
+        breakout_score += 10
+        breakout_reasons.append("近20日平均成交额达到流动性门槛")
+    else:
+        breakout_missing.append("近20日平均成交额不足")
+    if atr_suitable:
+        breakout_score += 5
+    if affordable:
+        breakout_score += 5
+    breakout_b = bool(
+        breakout_confirmed
+        and daily_change is not None and 0.5 <= daily_change <= 5.5
+        and current_volume_ratio is not None and 1.2 <= current_volume_ratio <= 3.5
+        and liquidity_ok and affordable and breakout_score >= 65
+    )
+    breakout_c = bool(
+        breakout_near
+        and daily_change is not None and 0 <= daily_change <= 6
+        and current_volume_ratio is not None and current_volume_ratio >= 1.0
+        and liquidity_ok and breakout_score >= 40
+    )
+    breakout_tier = "B" if breakout_b else ("C" if breakout_c else "N")
+
+    # Strategy D: continuation of an already-established short-term move.
+    momentum_score = 0
+    momentum_reasons: list[str] = []
+    momentum_missing: list[str] = []
+    if return_5d >= 2:
+        momentum_score += 15
+        momentum_reasons.append("近5日已有正向动量")
+    else:
+        momentum_missing.append("近5日动量不足")
+    if return_10d >= 4:
+        momentum_score += 15
+        momentum_reasons.append("近10日上涨波段较明显")
+    else:
+        momentum_missing.append("近10日上涨波段不足")
+    if current_price >= ma5:
+        momentum_score += 7
+    if current_price >= ma10:
+        momentum_score += 7
+    if current_price >= ma20:
+        momentum_score += 6
+        momentum_reasons.append("价格位于MA5/10/20上方")
+    else:
+        momentum_missing.append("价格未能站稳MA20")
+    if daily_change is not None and 0.5 <= daily_change <= 5.5:
+        momentum_score += 15
+        momentum_reasons.append("当日保持温和走强")
+    else:
+        momentum_missing.append("当日动量偏弱或涨幅过大")
+    if current_volume_ratio is not None and 1.1 <= current_volume_ratio <= 3.5:
+        momentum_score += 15
+        momentum_reasons.append("量能较近期活跃")
+    else:
+        momentum_missing.append("量能确认不足")
+    if liquidity_ok:
+        momentum_score += 10
+    if atr_suitable:
+        momentum_score += 5
+    if affordable:
+        momentum_score += 5
+    momentum_b = bool(
+        return_5d >= 2 and return_10d >= 4
+        and daily_change is not None and 0.5 <= daily_change <= 5.5
+        and current_volume_ratio is not None and 1.1 <= current_volume_ratio <= 3.5
+        and current_price >= ma10 and liquidity_ok and affordable
+        and momentum_score >= 65
+    )
+    momentum_c = bool(
+        return_5d > 0 and return_10d > 2
+        and daily_change is not None and -0.5 <= daily_change <= 5.5
+        and current_price >= ma20 * 0.98 and liquidity_ok
+        and momentum_score >= 40
+    )
+    momentum_tier = "B" if momentum_b else ("C" if momentum_c else "N")
+
+    # Strategy E: next-session strength watch. This is not a prediction that
+    # tomorrow will rise; it only ranks liquid, active stocks without chasing.
+    next_day_score = 0
+    next_day_reasons: list[str] = []
+    next_day_missing: list[str] = []
+    if daily_change is not None and 1.0 <= daily_change <= 5.5:
+        next_day_score += 20
+        next_day_reasons.append("当日涨幅适中，具备隔日强势观察价值")
+    else:
+        next_day_missing.append("当日涨幅不符合隔日动量观察区间")
+    if current_volume_ratio is not None and 1.3 <= current_volume_ratio <= 3.5:
+        next_day_score += 20
+        next_day_reasons.append("量比处于活跃但非极端区间")
+    elif current_volume_ratio is not None and 1.1 <= current_volume_ratio < 1.3:
+        next_day_score += 10
+        next_day_missing.append("量比有所改善但不突出")
+    else:
+        next_day_missing.append("隔日策略缺少量能确认")
+    if return_3d > 0:
+        next_day_score += 15
+        next_day_reasons.append("近3日价格动量为正")
+    else:
+        next_day_missing.append("近3日动量尚未转正")
+    if return_5d > 0:
+        next_day_score += 10
+    if current_price >= ma5 * 0.99:
+        next_day_score += 10
+        next_day_reasons.append("价格守住MA5附近")
+    else:
+        next_day_missing.append("价格仍低于MA5较多")
+    if current_price <= ma5 * 1.06:
+        next_day_score += 5
+    else:
+        next_day_missing.append("价格偏离MA5较远，隔日追高风险增加")
+    if liquidity_ok:
+        next_day_score += 10
+        next_day_reasons.append("近20日平均成交额满足流动性要求")
+    else:
+        next_day_missing.append("流动性不足")
+    if atr_suitable:
+        next_day_score += 5
+    if affordable:
+        next_day_score += 5
+    next_day_b = bool(
+        daily_change is not None and 1.0 <= daily_change <= 5.5
+        and current_volume_ratio is not None and 1.3 <= current_volume_ratio <= 3.5
+        and return_3d > 0 and return_5d > 0
+        and current_price >= ma5 * 0.99 and current_price <= ma5 * 1.06
+        and liquidity_ok and affordable and next_day_score >= 65
+    )
+    next_day_c = bool(
+        daily_change is not None and 0.5 <= daily_change <= 6.0
+        and current_volume_ratio is not None and current_volume_ratio >= 1.1
+        and return_3d >= 0 and liquidity_ok and next_day_score >= 40
+    )
+    next_day_tier = "B" if next_day_b else ("C" if next_day_c else "N")
+
+    # Strategy F: short-term oversold bounce, distinct from the slower base
+    # reversal model. A deep decline alone never qualifies without a rebound.
+    oversold_zone = bool(near_20d_low or near_60d_low)
+    oversold_score = 0
+    oversold_reasons: list[str] = []
+    oversold_missing: list[str] = []
+    if oversold_zone:
+        oversold_score += 20
+        oversold_reasons.append("价格位于20/60日区间低位附近")
+    else:
+        oversold_missing.append("未处于近期低位区域")
+    if prior_decline:
+        oversold_score += 10
+        oversold_reasons.append("此前存在一段调整")
+    if rebound_from_5d_low is not None and rebound_from_5d_low >= 2:
+        oversold_score += 20
+        oversold_reasons.append("较近5日低点已有明显反弹")
+    elif rebound_from_5d_low is not None and rebound_from_5d_low >= 1:
+        oversold_score += 10
+        oversold_missing.append("反弹幅度仍较有限")
+    else:
+        oversold_missing.append("尚未从近期低点有效反弹")
+    if daily_change is not None and 0.5 <= daily_change <= 5.5:
+        oversold_score += 15
+        oversold_reasons.append("当日出现温和修复")
+    else:
+        oversold_missing.append("当日修复力度不足或涨幅过大")
+    if current_volume_ratio is not None and 1.2 <= current_volume_ratio <= 3.5:
+        oversold_score += 15
+        oversold_reasons.append("反弹伴随成交活跃")
+    else:
+        oversold_missing.append("反弹量能确认不足")
+    if base_holds_20d_low:
+        oversold_score += 10
+    if liquidity_ok:
+        oversold_score += 10
+    if not severe_decline:
+        oversold_score += 5
+    if affordable:
+        oversold_score += 5
+    oversold_b = bool(
+        oversold_zone and base_holds_20d_low
+        and rebound_from_5d_low is not None and rebound_from_5d_low >= 2
+        and daily_change is not None and 0.5 <= daily_change <= 5.5
+        and current_volume_ratio is not None and 1.2 <= current_volume_ratio <= 3.5
+        and liquidity_ok and affordable and not severe_decline
+        and oversold_score >= 65
+    )
+    oversold_c = bool(
+        oversold_zone and rebound_from_5d_low is not None and rebound_from_5d_low >= 1
+        and daily_change is not None and 0 <= daily_change <= 6
+        and liquidity_ok and oversold_score >= 40
+    )
+    oversold_tier = "B" if oversold_b else ("C" if oversold_c else "N")
+
     strategy_tiers = {
         "trend_pullback": trend_tier,
         "bottom_reversal": bottom_tier,
+        "breakout_start": breakout_tier,
+        "momentum_continuation": momentum_tier,
+        "next_day_momentum": next_day_tier,
+        "oversold_bounce": oversold_tier,
     }
     strategy_scores = {
         "trend_pullback": int(trend_score),
         "bottom_reversal": int(bottom_score),
+        "breakout_start": int(breakout_score),
+        "momentum_continuation": int(momentum_score),
+        "next_day_momentum": int(next_day_score),
+        "oversold_bounce": int(oversold_score),
+    }
+    strategy_labels = {
+        "trend_pullback": "趋势回调低吸",
+        "bottom_reversal": "阶段性底部反转",
+        "breakout_start": "平台突破启动",
+        "momentum_continuation": "强势趋势延续",
+        "next_day_momentum": "隔日冲高观察",
+        "oversold_bounce": "短线超跌反弹",
+    }
+    strategy_reason_map = {
+        "trend_pullback": (trend_reasons, trend_missing),
+        "bottom_reversal": (bottom_reasons, bottom_missing),
+        "breakout_start": (breakout_reasons, breakout_missing),
+        "momentum_continuation": (momentum_reasons, momentum_missing),
+        "next_day_momentum": (next_day_reasons, next_day_missing),
+        "oversold_bounce": (oversold_reasons, oversold_missing),
     }
     qualified = [
         name for name, tier in strategy_tiers.items() if tier in ("B", "C")
@@ -504,13 +788,12 @@ def calculate_indicators(
             else best_strategy
         )
         strategy_name = (
-            "趋势回调低吸" if best_strategy == "trend_pullback"
-            else "阶段性底部反弹"
+            strategy_labels[best_strategy]
+            if len(qualified) == 1
+            else "多策略共振：" + "、".join(strategy_labels[name] for name in qualified)
         )
-        reasons = trend_reasons if best_strategy == "trend_pullback" else bottom_reasons
-        missing_conditions = (
-            trend_missing if best_strategy == "trend_pullback" else bottom_missing
-        )
+        candidate_strategy = best_strategy if len(qualified) == 1 else "multiple"
+        reasons, missing_conditions = strategy_reason_map[best_strategy]
         # Keep the aggregate score comparable across the two independent models.
         best_score = max(strategy_scores[name] for name in qualified)
 
@@ -544,6 +827,15 @@ def calculate_indicators(
         "nearest_support_distance_pct": round(nearest_support_distance, 2)
         if nearest_support_distance is not None else None,
         "low_20d": round(low_20d, 3),
+        "high_20d": round(high_20d, 3),
+        "distance_20d_high_pct": round(distance_20d_high, 2)
+        if distance_20d_high is not None else None,
+        "current_volume_ratio": round(current_volume_ratio, 3)
+        if current_volume_ratio is not None else None,
+        "current_turnover_pct": round(current_turnover_pct, 3)
+        if current_turnover_pct is not None else None,
+        "current_amount_cny": round(current_amount_cny, 2)
+        if current_amount_cny is not None else None,
         "low_60d": round(low_60d, 3) if low_60d is not None else None,
         "high_60d": round(high_60d, 3) if high_60d is not None else None,
         "distance_20d_low_pct": round(distance_20d_low, 2)
@@ -580,6 +872,16 @@ def calculate_indicators(
         "bottom_reversal_score": int(bottom_score),
         "trend_pullback_tier": trend_tier,
         "bottom_reversal_tier": bottom_tier,
+        "breakout_start_score": int(breakout_score),
+        "breakout_start_tier": breakout_tier,
+        "momentum_continuation_score": int(momentum_score),
+        "momentum_continuation_tier": momentum_tier,
+        "next_day_momentum_score": int(next_day_score),
+        "next_day_momentum_tier": next_day_tier,
+        "oversold_bounce_score": int(oversold_score),
+        "oversold_bounce_tier": oversold_tier,
+        "next_day_strength_watch": bool(next_day_tier in ("B", "C")),
+        "candidate_strategies": [name for name in qualified],
         "trend_pullback_structure_signals": int(trend_structure_signals),
         "bottom_near_20d_low": bool(near_20d_low),
         "bottom_near_60d_low": bool(near_60d_low),
@@ -603,8 +905,9 @@ def calculate_indicators(
         "calculation_basis": (
             "Completed daily bars before current_date are used for all historical metrics; "
             "current_price/current_change_pct are the separately retrieved spot snapshot. "
-            "Trend-pullback and bottom-reversal scores are independent. "
-            "ATR(14) is a volatility filter/ranking feature, not a return forecast. "
-            "B-tier candidates must pass the 100-share single-position budget check."
+            "Six independent setups are scored: trend pullback, base reversal, breakout, momentum continuation, next-day strength watch and oversold bounce. "
+            "Daily snapshot scores are not forecasts; no minute-bar confirmation is available, so buyable remains false. "
+            "ATR(14) is a volatility feature, not a return forecast. "
+            "B-tier buy-list candidates must pass the 100-share single-position budget check."
         ),
     }
