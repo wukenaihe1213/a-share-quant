@@ -622,6 +622,9 @@ def scan(
             "trend_pullback_b_count": int(
                 sum(1 for item in candidates if item.get("trend_pullback_tier") == "B")
             ),
+            "trend_pullback_c_count": int(
+                sum(1 for item in candidates if item.get("trend_pullback_tier") == "C")
+            ),
             "bottom_reversal_b_count": int(
                 sum(1 for item in candidates if item.get("bottom_reversal_tier") == "B")
             ),
