@@ -400,19 +400,28 @@ def summarize_market(spot: pd.DataFrame) -> dict[str, Any]:
 def build_history_pool(
     spot: pd.DataFrame,
     max_history_stocks: int,
-    min_amount_cny: float,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Choose a bounded history-scan pool without treating today's partial turnover as 20-day liquidity."""
     pool = spot.copy()
     pool["name"] = pool["name"].fillna("")
     excluded_st = pool["name"].str.contains(r"ST|退", case=False, regex=True)
     excluded_price = pool["price"].isna() | (pool["price"] <= 0)
-    excluded_amount = pool["amount"].isna() | (pool["amount"] < min_amount_cny)
-    eligible = pool.loc[~(excluded_st | excluded_price | excluded_amount)].copy()
+    eligible = pool.loc[~(excluded_st | excluded_price)].copy()
 
+    spot_60d_available = int(eligible["pct_60d"].notna().sum())
     positive_60d = eligible.loc[
         eligible["pct_60d"].notna() & (eligible["pct_60d"] > 0)
     ]
-    primary = positive_60d.sort_values("amount", ascending=False).head(max_history_stocks)
+    if spot_60d_available:
+        primary = positive_60d.sort_values("amount", ascending=False).head(max_history_stocks)
+        selection_mode = "spot_60d_positive_then_spot_amount_rank"
+    else:
+        # Spot amount is only a ranking hint for the bounded request pool.
+        # The actual 20-day average-turnover requirement is checked later
+        # from completed daily K-lines in calculate_indicators().
+        primary = eligible.sort_values("amount", ascending=False).head(max_history_stocks)
+        selection_mode = "spot_amount_rank_only_no_hard_cutoff"
+
     if len(primary) < max_history_stocks:
         remaining = eligible.loc[~eligible["code"].isin(primary["code"])]
         fill = remaining.sort_values("amount", ascending=False).head(
@@ -420,18 +429,14 @@ def build_history_pool(
         )
         primary = pd.concat([primary, fill], ignore_index=True)
 
-    spot_60d_available = int(eligible["pct_60d"].notna().sum())
     counts = {
         "spot_rows": int(len(spot)),
         "excluded_st_or_delisting": int(excluded_st.sum()),
-        "excluded_low_amount": int(excluded_amount.sum()),
-        "eligible_by_liquidity": int(len(eligible)),
+        "excluded_invalid_price": int(excluded_price.sum()),
+        "eligible_for_history_scan": int(len(eligible)),
         "spot_60d_available_count": spot_60d_available,
         "positive_60d_in_spot": int(len(positive_60d)) if spot_60d_available else None,
-        "history_pool_selection_mode": (
-            "spot_60d_positive_then_liquidity"
-            if spot_60d_available else "liquidity_only_spot_60d_unavailable"
-        ),
+        "history_pool_selection_mode": selection_mode,
         "history_pool_size": int(len(primary)),
     }
     return primary.reset_index(drop=True), counts
@@ -460,7 +465,7 @@ def scan(
 
     market_summary = summarize_market(spot)
     pool, pool_counts = build_history_pool(
-        spot, max_history_stocks=max_history_stocks, min_amount_cny=min_amount_cny
+        spot, max_history_stocks=max_history_stocks
     )
 
     candidates: list[dict[str, Any]] = []
