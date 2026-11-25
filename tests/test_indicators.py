@@ -70,6 +70,46 @@ class IndicatorTests(unittest.TestCase):
         self.assertFalse(result["trend_up"])
         self.assertFalse(result["watchlist_eligible"])
 
+    def test_marks_partial_but_structurally_sound_setup_as_watchlist_b(self):
+        today = date(2026, 11, 24)
+        rows = []
+        for index in range(70):
+            close = 10.0 + index * 0.03
+            high = close + 0.10
+            volume = 1000
+            if index >= 60:
+                tail = [
+                    (12.0, 12.1), (12.2, 12.3), (12.5, 12.6),
+                    (12.8, 12.9), (13.1, 13.2), (13.4, 13.5),
+                    (13.2, 13.3), (13.0, 13.1), (12.9, 13.0),
+                    (12.95, 13.0),
+                ]
+                close, high = tail[index - 60]
+            if index >= 67:
+                volume = 500
+            rows.append({
+                "date": (today - timedelta(days=70-index)).isoformat(),
+                "open": close - 0.03,
+                "high": high,
+                "low": close - 0.10,
+                "close": close,
+                "volume": volume,
+                "amount": 200_000_000,
+            })
+        result = calculate_indicators(
+            history=pd.DataFrame(rows),
+            current_price=13.0,
+            current_change_pct=0.5,
+            current_date=today,
+        )
+        self.assertTrue(result["trend_up"])
+        self.assertTrue(result["pullback_ok"])
+        self.assertTrue(result["volume_shrinking"])
+        self.assertTrue(result["support_near"])
+        self.assertEqual(result["daily_setup_tier"], "B")
+        self.assertTrue(result["watchlist_eligible"])
+        self.assertFalse(result["buyable"])
+
     def test_current_day_bar_is_excluded(self):
         history = self.make_history()
         current_day = pd.DataFrame([{
