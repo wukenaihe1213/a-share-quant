@@ -23,9 +23,9 @@ GLOBAL_FEEDS = (
 )
 
 COLUMN_ALIASES = {
-    "title": ("标题", "新闻标题", "资讯标题", "标题内容", "title", "headline"),
+    "title": ("标题", "新闻标题", "资讯标题", "标题内容", "公告标题", "announcementTitle", "title", "headline"),
     "content": ("内容", "新闻内容", "摘要", "简要内容", "content", "summary", "digest"),
-    "published_at": ("发布时间", "时间", "日期", "新闻时间", "公告时间", "public_time", "datetime", "pub_time", "date"),
+    "published_at": ("发布时间", "时间", "日期", "新闻时间", "公告时间", "announcementTime", "public_time", "datetime", "pub_time", "date"),
     "url": ("链接", "新闻链接", "公告链接", "url", "href", "link"),
     "code": ("代码", "股票代码", "证券代码", "code", "symbol"),
     "name": ("名称", "股票名称", "证券简称", "简称", "name"),
