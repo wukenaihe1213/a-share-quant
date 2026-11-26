@@ -49,6 +49,15 @@ class NewsSentimentTests(unittest.TestCase):
         self.assertTrue(rows[0]["is_recent_48h"])
         self.assertEqual(rows[0]["url"], "https://example.com/news/1")
 
+    def test_parse_compact_and_epoch_news_timestamps(self):
+        from src.news_sentiment import _parse_time
+        compact = _parse_time("20261126143000")
+        epoch_ms = _parse_time("1795674600000")
+        self.assertIsNotNone(compact)
+        self.assertEqual(compact.year, 2026)
+        self.assertIsNotNone(epoch_ms)
+        self.assertEqual(epoch_ms.year, 2026)
+
     def test_summary_marks_unscanned_candidates(self):
         summary = summarize_news([], scanned=False)
         self.assertEqual(summary["status"], "not_scanned")
