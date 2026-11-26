@@ -15,6 +15,7 @@ import akshare as ak
 import pandas as pd
 
 from src.indicators import calculate_indicators
+from src.news_sentiment import collect_news
 from src.tencent_quote import (
     fetch_baostock_history,
     fetch_baostock_universe,
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 JSON_OUTPUT = DATA_DIR / "market_scan.json"
 CSV_OUTPUT = DATA_DIR / "candidates.csv"
+NEWS_OUTPUT = DATA_DIR / "news_sentiment.json"
 
 SPOT_ALIASES = {
     "code": ("代码", "股票代码", "code", "symbol"),
@@ -875,6 +877,33 @@ def scan(
         ),
         reverse=True,
     )
+
+    # News is collected after technical ranking so requests focus on the highest-ranked
+    # candidates. It is stored as an independent context/risk dimension and does not
+    # change existing strategy scores or ranking until out-of-sample evidence supports it.
+    news_data = collect_news(
+        candidates,
+        max_stock_symbols=min(20, len(candidates)),
+        delay_seconds=0.25,
+        now=now_cn(),
+    )
+    news_by_code = news_data.get("candidate_news", {})
+    for candidate in candidates:
+        summary = news_by_code.get(str(candidate.get("code", "")).zfill(6), {})
+        candidate["news_sentiment_label"] = summary.get("sentiment_label", "not_scanned")
+        candidate["news_sentiment_score"] = summary.get("average_keyword_score")
+        candidate["news_recent_count_48h"] = summary.get("recent_news_count_48h", 0)
+        candidate["news_risk_alert"] = bool(summary.get("risk_alert", False))
+        candidate["news_risk_flags"] = summary.get("risk_flags", [])
+        candidate["news_latest_at"] = summary.get("latest_news_at")
+        candidate["news_sources"] = summary.get("sources", [])
+        candidate["news_scanned"] = bool(summary.get("scanned", False))
+    print(
+        "[NEWS][SUMMARY] "
+        + json.dumps(news_data.get("coverage", {}), ensure_ascii=False)
+        + f" status={news_data.get('status')}"
+    )
+
     board_industry = [
         x for x in boards
         if x["board_type"] == "industry" and x["change_pct"] is not None
@@ -896,7 +925,7 @@ def scan(
     )
     result = {
         "project": "a-share-quant",
-        "schema_version": 1,
+        "schema_version": 2,
         "status": status,
         "collected_at": collected_at.isoformat(timespec="seconds"),
         "timezone": "Asia/Shanghai",
@@ -1023,6 +1052,7 @@ def scan(
                 sum(1 for item in candidates if item.get("bottom_severe_decline", False))
             ),
         },
+        "news_data": news_data,
         "candidates": candidates[:output_candidates],
         "errors": errors[-30:],
         "limitations": [
@@ -1038,11 +1068,17 @@ def scan(
             "Tencent supplemental volume ratio/turnover metrics retain per-security quote timestamps and do not overwrite primary-source prices or daily change.",
             "A failed or partial Tencent supplement is disclosed in market_data.tencent_quote_enrichment; missing metrics remain null and are not fabricated.",
             "Sector board rankings are market context and are not treated as proof that an individual stock belongs to a strong trend setup.",
+            "News headlines and keyword sentiment are an independent context/risk dimension; they do not alter the six technical strategy scores or ranking in this version.",
+            "Only the top 20 ranked candidates receive individual news and disclosure lookups; other candidates are explicitly marked not_scanned.",
         ],
     }
 
     JSON_OUTPUT.write_text(
         json.dumps(json_safe(result), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    NEWS_OUTPUT.write_text(
+        json.dumps(json_safe(news_data), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     if candidates:
@@ -1057,6 +1093,7 @@ def scan(
     print("[SUMMARY] " + json.dumps(result["coverage"], ensure_ascii=False))
     print(f"[OK] JSON: {JSON_OUTPUT}")
     print(f"[OK] CSV: {CSV_OUTPUT}")
+    print(f"[OK] News JSON: {NEWS_OUTPUT}")
     print(f"[SUMMARY] Scan status: {status}; candidates: {len(candidates)}")
     return result
 
