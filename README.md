@@ -58,6 +58,37 @@
 - 没有14:25～14:30分钟线确认时，所有候选的 buyable 均为 false，不生成精确买入价或保证成交的止盈价。
 - 日线B档不等于可直接买入；分钟线、实时价格和风险退出位仍需确认。
 
+## 新闻与舆情分析
+
+扫描流程在技术候选排序完成后，独立运行新闻采集，不改变现有六种技术策略的评分或排序。当前免费数据源通过 AKShare 调用：
+- 东方财富全球财经快讯：`stock_info_global_em`
+- 新浪全球财经快讯：`stock_info_global_sina`
+- 财联社全球财经快讯：`stock_info_global_cls`
+- 同花顺全球财经快讯：`stock_info_global_ths`
+- 富途快讯：`stock_info_global_futu`
+- 财新财经内容精选：`stock_news_main_cx`
+- 候选个股新闻：`stock_news_em`
+- 候选公司公告：`stock_zh_a_disclosure_report_cninfo`（巨潮资讯）
+
+为控制免费接口访问频率，当前仅对技术排序前20只候选逐只查询个股新闻和公告；未查询的候选明确标记为 `not_scanned`，不得将“未查询”解释成“没有负面新闻”。市场快讯源逐一隔离调用，单个来源失败不会使行情扫描整体失败。
+
+新闻采集范围以最近48小时为主。只有能解析发布时间且确认为最近48小时的新闻，才计入近期舆情摘要；无可解析发布时间的新闻保留来源信息但不计入近期情绪统计。系统记录原始标题、内容摘要、发布时间、来源、链接、事件类别、关键词命中和风险词。
+
+当前情绪分类采用透明的中文关键词规则（正面、负面、混合、未分类），并列出触发词和事件类别。该方法是初步筛查，不具备完整语义理解能力，可能受到否定语境、标题党、转载重复、传闻和上下文影响。重大利好/利空必须回到公告原文或交易所/公司披露核实。
+
+重要纪律：
+- 新闻舆情先作为独立风险/背景维度展示，不直接加减六种技术策略分数，也不自动生成买卖信号。
+- “利好”不等于股价必涨；需要结合发布时间、股价此前走势、成交量、板块反应和市场是否已提前定价。
+- “利空风险词”只触发人工复核提示，不等同于已确认违规或基本面恶化。
+- 免费公开网页接口没有商业 SLA，可能限流、延迟、字段变化或不可用；每次运行都输出各数据源状态和错误。
+- 个股新闻与公告仅覆盖技术排名前20只股票；其余股票的舆情覆盖不完整，最终推荐前应针对入选股票再次核验。
+
+输出：
+- `data/news_sentiment.json`：完整新闻与舆情结果。
+- `market_scan.json` 的 `news_data`：嵌入新闻采集状态和摘要。
+- `candidates.csv`：增加 `news_sentiment_label`、`news_sentiment_score`、`news_risk_alert`、`news_scanned` 等字段。
+- `scan-results/latest/news_sentiment.json`：供 ChatGPT 每日任务读取的公开接口文件。
+
 ## 资金与风险规则
 
 默认按账户资金不超过10,000元计算：
@@ -126,7 +157,8 @@ AKShare东方财富/新浪快照不提供可靠的逐证券交易所时间戳，
 
 ## 输出文件
 - data/market_scan.json：市场概览、数据覆盖、六种策略分数、B/C/N档、风险预算、腾讯补充行情覆盖率/字段来源和数据限制。
-- data/candidates.csv：逐只股票的指标和策略结果。
+- data/candidates.csv：逐只股票的指标和策略结果（含新闻舆情摘要字段）。
+- data/news_sentiment.json：多源市场新闻、个股新闻/公告、发布时间、链接、关键词分类和风险提示。
 - GitHub Actions Artifact 保留30天。
 
 ## ChatGPT每日选股数据接口
@@ -135,6 +167,7 @@ AKShare东方财富/新浪快照不提供可靠的逐证券交易所时间戳，
 - [manifest.json](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/manifest.json)：扫描日期、运行编号、状态和覆盖数量。
 - [market_scan.json](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/market_scan.json)：市场概况、数据源、六策略评分和前50名候选。
 - [candidates.csv](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/candidates.csv)：逐只股票的技术指标和策略结果。
+- [news_sentiment.json](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/news_sentiment.json)：多源市场快讯、候选个股新闻、巨潮资讯公告、关键词舆情摘要和数据源状态。
 
 ChatGPT任务必须核验 `manifest.json` 与 `market_scan.json` 的 `collected_at`，仅使用北京时间当日的成功扫描结果；不得将前一交易日的文件当作当天行情。扫描报价时间与14:30有间隔时，必须披露实际采集时间，并尽可能重新核验候选股最新价格。若文件缺失、扫描失败或数据过期，必须明确说明GitHub数据链路未成功，不得伪造实时指标或买入价。
 
