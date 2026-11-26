@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -63,12 +64,13 @@ class NewsSentimentTests(unittest.TestCase):
         # unavailable result when the upstream functions are missing or raise.
         class Candidate(dict):
             pass
-        result = collect_news(
-            [{"code": "600000", "name": "测试股"}],
-            max_stock_symbols=0,
-            delay_seconds=0,
-            now=datetime(2026, 11, 26, 14, 30, tzinfo=SHANGHAI),
-        )
+        with patch("src.news_sentiment._call_global_feed", side_effect=RuntimeError("offline")):
+            result = collect_news(
+                [{"code": "600000", "name": "测试股"}],
+                max_stock_symbols=0,
+                delay_seconds=0,
+                now=datetime(2026, 11, 26, 14, 30, tzinfo=SHANGHAI),
+            )
         self.assertIn(result["status"], {"unavailable", "partial", "ok"})
         self.assertIn("candidate_news", result)
         self.assertEqual(result["coverage"]["candidate_symbols_requested"], 0)
