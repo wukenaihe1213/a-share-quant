@@ -18,10 +18,10 @@ on:
         required: true
         default: "1.2"
         type: string
-  # 14:10 China Standard Time, Monday-Friday. The ChatGPT task verifies
+  # 14:00 China Standard Time, Monday-Friday. The ChatGPT task verifies
   # the A-share trading calendar and rejects stale or non-trading-day data.
   schedule:
-    - cron: "10 6 * * 1-5"
+    - cron: "0 6 * * 1-5"
 
 permissions:
   contents: write
