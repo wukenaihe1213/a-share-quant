@@ -73,6 +73,7 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
+          git pull --rebase origin main
           mkdir -p scan-results/latest
           cp data/market_scan.json scan-results/latest/market_scan.json
           cp data/candidates.csv scan-results/latest/candidates.csv
@@ -106,7 +107,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No scan-result changes to publish."
           else
-            git pull --rebase origin main
             git commit -m "Publish A-share scan results"
             git push origin HEAD:main
           fi
