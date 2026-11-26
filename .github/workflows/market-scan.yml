@@ -73,6 +73,7 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
+          git checkout -B main
           git pull --rebase origin main
           mkdir -p scan-results/latest
           cp data/market_scan.json scan-results/latest/market_scan.json
