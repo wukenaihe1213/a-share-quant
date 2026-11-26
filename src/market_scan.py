@@ -881,12 +881,33 @@ def scan(
     # News is collected after technical ranking so requests focus on the highest-ranked
     # candidates. It is stored as an independent context/risk dimension and does not
     # change existing strategy scores or ranking until out-of-sample evidence supports it.
-    news_data = collect_news(
-        candidates,
-        max_stock_symbols=min(20, len(candidates)),
-        delay_seconds=0.25,
-        now=now_cn(),
-    )
+    try:
+        news_data = collect_news(
+            candidates,
+            max_stock_symbols=min(20, len(candidates)),
+            delay_seconds=0.25,
+            now=now_cn(),
+        )
+    except Exception as exc:
+        # News is an optional enrichment: a news-provider failure must never abort
+        # the technical market scan or cause stale news to be reused.
+        news_data = {
+            "schema_version": 1,
+            "status": "error",
+            "collected_at": now_cn().isoformat(timespec="seconds"),
+            "timezone": "Asia/Shanghai",
+            "provider_status": {},
+            "coverage": {
+                "candidate_symbols_requested": min(20, len(candidates)),
+                "candidate_symbols_with_recent_news": 0,
+                "candidate_symbols_total": len(candidates),
+            },
+            "market_sentiment": {"sentiment_label": "unavailable"},
+            "market_news": [],
+            "candidate_news": {},
+            "errors": [f"{type(exc).__name__}: {exc}"[:1000]],
+            "limitations": ["News collection failed; no news-based conclusion is available."],
+        }
     news_by_code = news_data.get("candidate_news", {})
     for candidate in candidates:
         summary = news_by_code.get(str(candidate.get("code", "")).zfill(6), {})
