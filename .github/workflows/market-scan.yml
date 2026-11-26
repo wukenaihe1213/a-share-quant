@@ -78,6 +78,7 @@ jobs:
           mkdir -p scan-results/latest
           cp data/market_scan.json scan-results/latest/market_scan.json
           cp data/candidates.csv scan-results/latest/candidates.csv
+          cp data/news_sentiment.json scan-results/latest/news_sentiment.json
           python - <<'PY'
           import json
           import os
@@ -96,6 +97,8 @@ jobs:
               "candidate_count": result.get("coverage", {}).get("candidate_count"),
               "history_success": result.get("coverage", {}).get("history_success"),
               "history_requested": result.get("coverage", {}).get("history_requested"),
+              "news_status": result.get("news_data", {}).get("status"),
+              "news_coverage": result.get("news_data", {}).get("coverage"),
           }
           Path("scan-results/latest/manifest.json").write_text(
               json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -104,7 +107,7 @@ jobs:
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scan-results/latest/market_scan.json scan-results/latest/candidates.csv scan-results/latest/manifest.json
+          git add scan-results/latest/market_scan.json scan-results/latest/candidates.csv scan-results/latest/news_sentiment.json scan-results/latest/manifest.json
           if git diff --cached --quiet; then
             echo "No scan-result changes to publish."
           else
@@ -120,5 +123,6 @@ jobs:
           path: |
             data/market_scan.json
             data/candidates.csv
+            data/news_sentiment.json
           if-no-files-found: warn
           retention-days: 30
