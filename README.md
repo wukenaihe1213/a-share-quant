@@ -2,7 +2,7 @@
 
 个人 A 股量化研究与选股项目，使用 Python + AKShare 获取公开市场数据。
 
-> 当前阶段：六策略日线/行情快照初筛已实现，详细历史K线默认扫描300只；本次增加腾讯行情补充字段与来源追踪。14:25～14:30分钟线确认、历史回测、推荐复盘、交易日历和自动通知尚未完成。
+> 当前阶段：六策略日线/行情快照初筛已实现，详细历史K线默认扫描300只；工作流已配置北京时间工作日14:10自动扫描，并在成功后将机器可读结果发布到公开仓库，供ChatGPT每日14:30任务读取。首次定时运行仍需验收。14:25～14:30分钟线确认、历史回测和完整自动复盘仍在后续开发。
 
 ## 当前已实现
 
@@ -129,13 +129,22 @@ AKShare东方财富/新浪快照不提供可靠的逐证券交易所时间戳，
 - data/candidates.csv：逐只股票的指标和策略结果。
 - GitHub Actions Artifact 保留30天。
 
+## ChatGPT每日选股数据接口
+
+全市场扫描成功后，GitHub Actions 会将当次结果发布到仓库 `scan-results/latest/`，供ChatGPT每日14:30任务直接读取，无需下载Actions Artifact：
+- [manifest.json](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/manifest.json)：扫描日期、运行编号、状态和覆盖数量。
+- [market_scan.json](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/market_scan.json)：市场概况、数据源、六策略评分和前50名候选。
+- [candidates.csv](https://raw.githubusercontent.com/wukenaihe1213/a-share-quant/main/scan-results/latest/candidates.csv)：逐只股票的技术指标和策略结果。
+
+ChatGPT任务必须核验 `manifest.json` 与 `market_scan.json` 的 `collected_at`，仅使用北京时间当日的成功扫描结果；不得将前一交易日的文件当作当天行情。扫描报价时间与14:30有间隔时，必须披露实际采集时间，并尽可能重新核验候选股最新价格。若文件缺失、扫描失败或数据过期，必须明确说明GitHub数据链路未成功，不得伪造实时指标或买入价。
+
 ## 数据限制与后续开发
 - 全市场快照覆盖与详细历史K线覆盖不同；技术指标目前只对默认300只历史扫描池计算。
 - 新浪实时快照的采集时间不是交易所逐笔报价时间；腾讯备用源会记录其返回的单股行情时间字段。
 - 腾讯 `qt.gtimg.cn` 为公开非正式接口，没有官方 SLA；BaoStock 为独立数据服务，也可能出现网络/访问限制。多源降级只能提高可用性，不能保证永不故障。
 - 腾讯实时行情字段按公开接口约定解析，成交额字段以万元为单位换算为元；上线后应持续监控报价时间、覆盖率和与主源的偏差。
 - 当前没有14:25～14:30分钟线确认、财务公告核验、历史推荐跟踪、10日复盘和回测。六类日线/快照评分只能用于候选排序，不能证明“今天买、明天卖”一定盈利。
-- 当前工作流仍需手动触发；交易日历、A股交易日14:30自动运行和ChatGPT通知尚未启用。
+- 全市场扫描工作流已同时支持手动触发和工作日14:10（北京时间）定时触发；GitHub cron按周一至周五运行，不自行识别法定节假日，ChatGPT每日任务必须另行核验A股交易日并拒绝使用非交易日或过期结果。
 - 行业/概念板块只作为市场环境信息，不直接证明某只股票符合策略。
 
 后续路线：
