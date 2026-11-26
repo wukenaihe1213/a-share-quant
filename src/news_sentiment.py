@@ -87,7 +87,17 @@ def _parse_time(value: Any) -> datetime | None:
     if value is None:
         return None
     try:
-        parsed = pd.to_datetime(value, errors="coerce")
+        raw = str(value).strip()
+        if re.fullmatch(r"\\d{14}", raw):
+            parsed = pd.to_datetime(raw, format="%Y%m%d%H%M%S", errors="coerce")
+        elif re.fullmatch(r"\\d{8}", raw):
+            parsed = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
+        elif re.fullmatch(r"\\d{13}", raw):
+            parsed = pd.to_datetime(int(raw), unit="ms", errors="coerce")
+        elif re.fullmatch(r"\\d{10}", raw):
+            parsed = pd.to_datetime(int(raw), unit="s", errors="coerce")
+        else:
+            parsed = pd.to_datetime(value, errors="coerce")
         if pd.isna(parsed):
             return None
         if parsed.tzinfo is None:
