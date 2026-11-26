@@ -88,13 +88,13 @@ def _parse_time(value: Any) -> datetime | None:
         return None
     try:
         raw = str(value).strip()
-        if re.fullmatch(r"\\d{14}", raw):
+        if re.fullmatch(r"\d{14}", raw):
             parsed = pd.to_datetime(raw, format="%Y%m%d%H%M%S", errors="coerce")
-        elif re.fullmatch(r"\\d{8}", raw):
+        elif re.fullmatch(r"\d{8}", raw):
             parsed = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
-        elif re.fullmatch(r"\\d{13}", raw):
+        elif re.fullmatch(r"\d{13}", raw):
             parsed = pd.to_datetime(int(raw), unit="ms", errors="coerce")
-        elif re.fullmatch(r"\\d{10}", raw):
+        elif re.fullmatch(r"\d{10}", raw):
             parsed = pd.to_datetime(int(raw), unit="s", errors="coerce")
         else:
             parsed = pd.to_datetime(value, errors="coerce")
