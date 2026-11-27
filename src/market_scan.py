@@ -860,7 +860,11 @@ def scan(
     tier_rank = {"B": 2, "C": 1, "N": 0}
     candidates.sort(
         key=lambda item: (
+            # Prefer a candidate with a calculated conditional entry/stop/size plan.
+            # This is not a confirmed intraday buy signal; it makes the report more actionable.
+            bool(item.get("conditional_plan_available", False)),
             tier_rank.get(item.get("daily_setup_tier"), 0),
+            item.get("suggested_shares_two_positions", 0) >= 100,
             item.get("affordable", False),
             item.get("atr_suitable", False),
             item.get("score", 0),
@@ -1015,6 +1019,19 @@ def scan(
                 success_count / len(pool) * 100, 2
             ) if len(pool) else 0,
             "candidate_count": int(len(candidates)),
+            "conditional_plan_count": int(
+                sum(1 for item in candidates if item.get("conditional_plan_available", False))
+            ),
+            "conditional_plan_b_count": int(
+                sum(1 for item in candidates
+                    if item.get("conditional_plan_available", False)
+                    and item.get("daily_setup_tier") == "B")
+            ),
+            "conditional_plan_c_count": int(
+                sum(1 for item in candidates
+                    if item.get("conditional_plan_available", False)
+                    and item.get("daily_setup_tier") == "C")
+            ),
             "history_positive_60d": int(
                 sum(1 for item in candidates if (item.get("return_60d_pct") or 0) > 0)
             ),
@@ -1080,8 +1097,9 @@ def scan(
             "The full-market spot snapshot is scanned, but detailed daily K-lines are fetched only for the liquidity/trend-prioritized history pool.",
             "Six independent short-term strategies are scored; a negative 60-day return is not a hard veto for all strategies.",
             "Detailed daily K-lines are calculated for a diversified 300-stock multi-signal history pool by default, not every stock in the 5,000+ spot universe.",
-            "No 14:25-14:30 minute-bar confirmation is included yet; next-day-strength candidates are watchlist signals only and all candidates have buyable=false.",
-            "No precise buy zone or take-profit price is emitted until minute-level confirmation and support validation are implemented.",
+            "No 14:25-14:30 minute-bar confirmation is included yet; all candidates retain buyable=false until a separate intraday confirmation is available.",
+            "Conditional entry zones, structural stop levels and risk-sized share counts are generated from daily support/resistance and ATR for eligible B/C candidates; they are trigger-based plans, not immediate buy orders or guaranteed fills.",
+            "No fixed take-profit ceiling is emitted; manage profitable positions with trend-following and moving-stop rules.",
             "ATR(14) is used only as a short-term volatility suitability/ranking feature; it is not a prediction of future returns.",
             "B-tier candidates must pass the estimated 100-share affordability check under the configured per-position budget; C-tier candidates may remain unaffordable watch-only names.",
             "The spot endpoint retrieval time is not a guaranteed exchange quote timestamp.",
