@@ -61,7 +61,10 @@ jobs:
           fi
 
           # Read the current main branch, not the possibly stale SHA attached to a queued schedule event.
-          git fetch --no-tags --depth=1 origin main
+          if ! git fetch --no-tags --depth=1 origin main; then
+            echo "Cannot fetch latest main for duplicate check; continuing with scan to avoid missing today's run."
+            exit 0
+          fi
           if ! git show origin/main:scan-results/latest/manifest.json > "$RUNNER_TEMP/latest-manifest.json" 2>/dev/null; then
             echo "No previously published manifest; this scheduled run will execute."
             exit 0
@@ -83,11 +86,13 @@ jobs:
 
           collected_at = str(manifest.get("collected_at") or "")
           collected_date = collected_at[:10]
+          collected_clock = collected_at[11:16] if len(collected_at) >= 16 else ""
           today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
           status = manifest.get("scan_status")
-          if collected_date == today and status == "ok":
+          # An early manual smoke run must not suppress the scheduled afternoon scan.
+          if collected_date == today and collected_clock >= "13:55" and status == "ok":
               print(
-                  f"Today's successful scan is already published "
+                  f"Today's successful afternoon scan is already published "
                   f"(run_id={manifest.get('run_id')}, collected_at={collected_at}); skipping duplicate."
               )
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -95,7 +100,8 @@ jobs:
           else:
               print(
                   f"No successful scan for {today} found "
-                  f"(latest_date={collected_date or 'unknown'}, status={status}); executing scan."
+                  f"(latest_date={collected_date or 'unknown'}, latest_time={collected_clock or 'unknown'}, "
+              f"status={status}); executing scan."
               )
           PY
 
