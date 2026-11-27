@@ -61,11 +61,11 @@
 ## 新闻与舆情分析
 
 扫描流程在技术候选排序完成后，独立运行新闻采集，不改变现有六种技术策略的评分或排序。当前免费数据源通过 AKShare 调用：
-- 东方财富全球财经快讯：`stock_info_global_em`
-- 新浪全球财经快讯：`stock_info_global_sina`
-- 财联社全球财经快讯：`stock_info_global_cls`
-- 同花顺全球财经快讯：`stock_info_global_ths`
-- 富途快讯：`stock_info_global_futu`
+- 东方财富全球财经快讯：`stock_news_global_em`
+- 新浪全球财经快讯：`stock_news_global_sina`
+- 财联社全球财经快讯：`stock_news_global_cls`
+- 同花顺全球财经快讯：`stock_news_global_ths`
+- 富途快讯：`stock_news_global_futu`
 - 财新财经内容精选：`stock_news_main_cx`
 - 候选个股新闻：`stock_news_em`
 - 候选公司公告：`stock_zh_a_disclosure_report_cninfo`（巨潮资讯）
