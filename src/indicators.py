@@ -78,6 +78,182 @@ def calculate_position_plan(
     }
 
 
+def calculate_conditional_trade_plan(
+    *,
+    current_price: float,
+    strategy: str,
+    tier: str,
+    ma5: float,
+    ma10: float,
+    ma20: float,
+    nearest_support: str | None,
+    nearest_support_distance_pct: float | None,
+    recent_low_5d: float,
+    high_20d: float,
+    atr14: float,
+    daily_change_pct: float | None,
+    liquidity_ok: bool,
+    affordable: bool,
+    account_capital_cny: float = 10_000.0,
+    cash_reserve_pct: float = 30.0,
+    max_positions: int = 2,
+    single_position_budget_cap_cny: float = 10_000.0,
+    max_loss_per_trade_pct: float = 5.0,
+    lot_size: int = 100,
+) -> dict[str, Any]:
+    """Build a conditional entry/stop/size plan; this is not an intraday buy signal."""
+    empty = {
+        "conditional_plan_available": False,
+        "conditional_plan_status": "no_plan",
+        "conditional_entry_low": None,
+        "conditional_entry_high": None,
+        "conditional_stop_loss": None,
+        "conditional_risk_pct": None,
+        "conditional_risk_budget_cny": round(
+            account_capital_cny * max_loss_per_trade_pct / 100, 2
+        ),
+        "suggested_shares_single_position": 0,
+        "suggested_shares_two_positions": 0,
+        "suggested_value_single_position_cny": 0.0,
+        "suggested_value_two_positions_cny": 0.0,
+        "estimated_loss_single_position_cny": 0.0,
+        "estimated_loss_two_positions_cny": 0.0,
+        "conditional_entry_trigger": None,
+        "conditional_plan_note": None,
+    }
+    if tier not in ("B", "C"):
+        empty["conditional_plan_note"] = "未达到B/C观察档位，不生成条件交易计划。"
+        return empty
+    if not liquidity_ok or not affordable:
+        empty["conditional_plan_note"] = "流动性或100股一手预算校验未通过。"
+        return empty
+    if current_price <= 0 or atr14 <= 0 or recent_low_5d <= 0:
+        empty["conditional_plan_note"] = "价格、ATR或近期低点数据不完整。"
+        return empty
+
+    support_map = {"MA5": ma5, "MA10": ma10, "MA20": ma20}
+    support_price = support_map.get(nearest_support or "")
+    support_is_near = (
+        support_price is not None
+        and support_price > 0
+        and nearest_support_distance_pct is not None
+        and nearest_support_distance_pct <= 5.0
+        and current_price >= support_price * 0.97
+    )
+
+    if strategy in ("trend_pullback", "bottom_reversal", "oversold_bounce"):
+        if support_is_near:
+            reference = float(support_price)
+            trigger = (
+                f"回踩{nearest_support}附近（参考{reference:.3f}元），"
+                "出现止跌并重新站回该支撑后再考虑分批介入。"
+            )
+            stop_reference = min(recent_low_5d, reference)
+        elif strategy in ("bottom_reversal", "oversold_bounce") and current_price <= recent_low_5d * 1.06:
+            reference = float(recent_low_5d)
+            trigger = (
+                f"回踩近5日低点{reference:.3f}元附近不破，"
+                "随后收复MA5并出现量能确认后再考虑介入。"
+            )
+            stop_reference = reference
+        else:
+            empty["conditional_plan_note"] = "价格尚未靠近可验证支撑，等待回踩，不给虚构买价。"
+            return empty
+        entry_low = reference * 0.99
+        entry_high = reference * 1.01
+    elif strategy == "breakout_start":
+        if high_20d <= 0:
+            empty["conditional_plan_note"] = "缺少20日区间高点，无法计算突破触发位。"
+            return empty
+        reference = float(high_20d)
+        entry_low = reference * 1.001
+        entry_high = reference * 1.015
+        trigger = (
+            f"放量有效突破前20日高点{reference:.3f}元，"
+            "随后回踩不破且量能保持，再考虑介入；不追已经远离触发区的价格。"
+        )
+        stop_reference = reference
+    else:
+        alternatives = [
+            (abs(current_price / ma5 - 1), "MA5", ma5),
+            (abs(current_price / ma10 - 1), "MA10", ma10),
+        ]
+        alternatives = [x for x in alternatives if x[2] > 0 and x[0] <= 0.04]
+        if not alternatives:
+            empty["conditional_plan_note"] = "动量股已偏离MA5/MA10，等待回踩，不追高。"
+            return empty
+        _, support_name, reference = min(alternatives, key=lambda x: x[0])
+        trigger = (
+            f"回踩{support_name}约{reference:.3f}元附近后止跌，"
+            "或重新站回该均线并保持量能，再考虑分批介入。"
+        )
+        entry_low = float(reference) * 0.99
+        entry_high = float(reference) * 1.01
+        stop_reference = min(recent_low_5d, float(reference))
+
+    buffer = max(float(atr14) * 0.35, entry_low * 0.008)
+    stop_loss = stop_reference - buffer
+    if stop_loss <= 0 or stop_loss >= entry_low:
+        empty["conditional_plan_note"] = "支撑与止损结构不合理，暂不生成交易计划。"
+        return empty
+    risk_pct = (entry_low - stop_loss) / entry_low * 100
+    if risk_pct > 8.0:
+        empty["conditional_plan_note"] = (
+            f"结构止损距离约{risk_pct:.2f}%，过宽，不适合当前短线风险预算。"
+        )
+        return empty
+
+    risk_budget = account_capital_cny * max_loss_per_trade_pct / 100
+    risk_per_share = entry_low - stop_loss
+    risk_lots = int(risk_budget / (risk_per_share * lot_size))
+    risk_shares = risk_lots * lot_size
+    investable = account_capital_cny * (1 - cash_reserve_pct / 100)
+    single_budget = min(single_position_budget_cap_cny, investable)
+    two_budget = single_budget / max_positions
+    single_budget_shares = int(single_budget / (entry_low * lot_size)) * lot_size
+    two_budget_shares = int(two_budget / (entry_low * lot_size)) * lot_size
+    single_shares = min(risk_shares, single_budget_shares)
+    two_shares = min(risk_shares, two_budget_shares)
+    if single_shares < lot_size:
+        empty["conditional_plan_note"] = "按单笔风险预算计算不足100股，不能建立符合纪律的仓位。"
+        return empty
+
+    change = daily_change_pct if daily_change_pct is not None else 0.0
+    if change > 5.5:
+        status = "wait_for_pullback_no_chase"
+        note = "当日涨幅偏大，条件区间仅供回踩参考，不追高。"
+    elif current_price < entry_low:
+        status = "wait_for_trigger"
+        note = "现价尚未进入条件区间，等待触发，不提前挂无依据买单。"
+    elif current_price > entry_high:
+        status = "wait_for_pullback"
+        note = "现价高于条件区间，等待回踩，不追高。"
+    else:
+        status = "await_intraday_confirmation"
+        note = "现价处于条件区间，但仍须核对分时止跌/承接；日线扫描本身不是确认买点。"
+    if tier == "C":
+        status = "C_watch_only_" + status
+        note = "C档仅观察，不能按正式买入信号执行。 " + note
+
+    return {
+        "conditional_plan_available": True,
+        "conditional_plan_status": status,
+        "conditional_entry_low": round(entry_low, 3),
+        "conditional_entry_high": round(entry_high, 3),
+        "conditional_stop_loss": round(stop_loss, 3),
+        "conditional_risk_pct": round(risk_pct, 2),
+        "conditional_risk_budget_cny": round(risk_budget, 2),
+        "suggested_shares_single_position": int(single_shares),
+        "suggested_shares_two_positions": int(two_shares),
+        "suggested_value_single_position_cny": round(single_shares * entry_low, 2),
+        "suggested_value_two_positions_cny": round(two_shares * entry_low, 2),
+        "estimated_loss_single_position_cny": round(single_shares * risk_per_share, 2),
+        "estimated_loss_two_positions_cny": round(two_shares * risk_per_share, 2),
+        "conditional_entry_trigger": trigger,
+        "conditional_plan_note": note,
+    }
+
+
 def calculate_indicators(
     history: pd.DataFrame,
     current_price: float,
@@ -802,6 +978,27 @@ def calculate_indicators(
         max_positions=max_positions,
         max_loss_per_trade_pct=max_loss_per_trade_pct,
     )
+    conditional_plan = calculate_conditional_trade_plan(
+        current_price=current_price,
+        strategy=candidate_strategy,
+        tier=daily_tier,
+        ma5=ma5,
+        ma10=ma10,
+        ma20=ma20,
+        nearest_support=nearest_support,
+        nearest_support_distance_pct=nearest_support_distance,
+        recent_low_5d=float(low.tail(5).min()),
+        high_20d=high_20d,
+        atr14=atr14,
+        daily_change_pct=daily_change,
+        liquidity_ok=liquidity_ok,
+        affordable=affordable,
+        account_capital_cny=account_capital_cny,
+        cash_reserve_pct=cash_reserve_pct,
+        max_positions=max_positions,
+        single_position_budget_cap_cny=single_position_budget_cap_cny,
+        max_loss_per_trade_pct=max_loss_per_trade_pct,
+    )
 
     return {
         "return_3d_pct": round(return_3d, 2),
@@ -895,9 +1092,17 @@ def calculate_indicators(
         "watchlist_eligible": bool(daily_tier == "B"),
         "intraday_confirmation": "not_checked",
         "buyable": False,
-        "buy_zone": None,
+        "buy_zone": (
+            {
+                "low": conditional_plan["conditional_entry_low"],
+                "high": conditional_plan["conditional_entry_high"],
+                "trigger": conditional_plan["conditional_entry_trigger"],
+            }
+            if conditional_plan["conditional_plan_available"] else None
+        ),
         "take_profit_zone": None,
         "risk_plan": position_plan,
+        **conditional_plan,
         "reasons": reasons,
         "missing_conditions": missing_conditions,
         "calculation_basis": (
@@ -905,6 +1110,7 @@ def calculate_indicators(
             "current_price/current_change_pct are the separately retrieved spot snapshot. "
             "Six independent setups are scored: trend pullback, base reversal, breakout, momentum continuation, next-day strength watch and oversold bounce. "
             "Daily snapshot scores are not forecasts; no minute-bar confirmation is available, so buyable remains false. "
+            "Conditional entry/stop/position plans are scenario levels based on daily support and ATR, not immediate buy orders. "
             "ATR(14) is a volatility feature, not a return forecast. "
             "B-tier candidates must pass the 100-share single-position budget check; B tier is not an executable buy signal."
         ),
