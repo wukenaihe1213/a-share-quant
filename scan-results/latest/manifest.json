@@ -1,14 +1,14 @@
 {
   "repository": "wukenaihe1213/a-share-quant",
   "workflow": "A-share full-market scan",
-  "run_id": "45770030253",
+  "run_id": "45953145044",
   "run_attempt": "1",
   "event_name": "workflow_dispatch",
-  "source_commit": "b1929d2779ae1213369bff697de834092128a25c",
-  "collected_at": "2026-11-26T14:42:47+08:00",
+  "source_commit": "6d7de0c4baa4cfb913d262a37f022ed779b464b1",
+  "collected_at": "2026-11-27T14:38:48+08:00",
   "scan_status": "ok",
-  "candidate_count": 298,
-  "history_success": 298,
+  "candidate_count": 299,
+  "history_success": 299,
   "history_requested": 300,
   "news_status": "partial",
   "news_coverage": {
@@ -17,7 +17,7 @@
     "global_recent_news_count": 0,
     "candidate_symbols_requested": 20,
     "candidate_symbols_with_recent_news": 15,
-    "candidate_symbols_total": 298,
-    "candidate_news_items": 195
+    "candidate_symbols_total": 299,
+    "candidate_news_items": 224
   }
 }
