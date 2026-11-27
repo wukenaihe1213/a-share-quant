@@ -18,11 +18,11 @@ on:
         required: true
         default: "1.2"
         type: string
-  # 14:00 China Standard Time, Monday-Friday (UTC 06:00).
-  # The scan is expected to finish before ChatGPT reads results at 14:30.
-  # If scan duration grows beyond this 30-minute window, review the schedule.
+  # Primary: 14:00 China time. Backup: 14:05 if today's successful result is not published.
+  # GitHub schedule events are best-effort; the backup and publication guard make the scan idempotent.
   schedule:
     - cron: "0 6 * * 1-5"
+    - cron: "5 6 * * 1-5"
 
 permissions:
   contents: write
@@ -41,7 +41,66 @@ jobs:
         with:
           persist-credentials: true
 
+      - name: Record trigger and check today's publication
+        id: preflight
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_EXPR: ${{ github.event.schedule || 'manual' }}
+        run: |
+          set -euo pipefail
+          echo "skip_scan=false" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT_NAME"
+          echo "schedule=$SCHEDULE_EXPR"
+          echo "triggered_at_utc=$(date -u --iso-8601=seconds)"
+          echo "triggered_at_china=$(TZ=Asia/Shanghai date --iso-8601=seconds)"
+
+          # Manual runs always execute. Scheduled primary/backup runs share an idempotency guard.
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "Manual dispatch: duplicate-scan guard is bypassed."
+            exit 0
+          fi
+
+          # Read the current main branch, not the possibly stale SHA attached to a queued schedule event.
+          git fetch --no-tags --depth=1 origin main
+          if ! git show origin/main:scan-results/latest/manifest.json > "$RUNNER_TEMP/latest-manifest.json" 2>/dev/null; then
+            echo "No previously published manifest; this scheduled run will execute."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          manifest_path = Path(os.environ["RUNNER_TEMP"]) / "latest-manifest.json"
+          try:
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          except Exception as exc:
+              print(f"Cannot read prior manifest ({exc}); this scheduled run will execute.")
+              raise SystemExit(0)
+
+          collected_at = str(manifest.get("collected_at") or "")
+          collected_date = collected_at[:10]
+          today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+          status = manifest.get("scan_status")
+          if collected_date == today and status == "ok":
+              print(
+                  f"Today's successful scan is already published "
+                  f"(run_id={manifest.get('run_id')}, collected_at={collected_at}); skipping duplicate."
+              )
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("skip_scan=true\\n")
+          else:
+              print(
+                  f"No successful scan for {today} found "
+                  f"(latest_date={collected_date or 'unknown'}, status={status}); executing scan."
+              )
+          PY
+
       - name: Set up Python
+        if: steps.preflight.outputs.skip_scan != 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -49,17 +108,20 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
+        if: steps.preflight.outputs.skip_scan != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run unit tests
+        if: steps.preflight.outputs.skip_scan != 'true'
         env:
           PYTHONUTF8: "1"
         run: |
           python -m unittest discover -s tests -v
 
       - name: Run full-market scan
+        if: steps.preflight.outputs.skip_scan != 'true'
         env:
           PYTHONUTF8: "1"
         run: |
@@ -70,7 +132,7 @@ jobs:
             --output-candidates 50
 
       - name: Publish machine-readable results for ChatGPT
-        if: success()
+        if: success() && steps.preflight.outputs.skip_scan != 'true'
         env:
           PYTHONUTF8: "1"
         run: |
@@ -102,7 +164,7 @@ jobs:
               "news_coverage": result.get("news_data", {}).get("coverage"),
           }
           Path("scan-results/latest/manifest.json").write_text(
-              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\\n",
               encoding="utf-8",
           )
           PY
@@ -117,7 +179,7 @@ jobs:
           fi
 
       - name: Upload scan output
-        if: always()
+        if: always() && steps.preflight.outputs.skip_scan != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: a-share-market-scan
