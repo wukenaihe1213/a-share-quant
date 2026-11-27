@@ -18,9 +18,9 @@ on:
         required: true
         default: "1.2"
         type: string
-  # 14:00 China Standard Time, Monday-Friday. Start before the ChatGPT 14:30 task
-  # and avoid GitHub top-of-hour schedule congestion. The ChatGPT task verifies
-  # the A-share trading calendar and rejects stale or non-trading-day data.
+  # 14:00 China Standard Time, Monday-Friday (UTC 06:00).
+  # The scan is expected to finish before ChatGPT reads results at 14:30.
+  # If scan duration grows beyond this 30-minute window, review the schedule.
   schedule:
     - cron: "0 6 * * 1-5"
 
