@@ -14,11 +14,11 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 NEWS_LOOKBACK_HOURS = 48
 
 GLOBAL_FEEDS = (
-    ("eastmoney_global", "stock_info_global_em"),
-    ("sina_global", "stock_info_global_sina"),
-    ("cls_global", "stock_info_global_cls"),
-    ("ths_global", "stock_info_global_ths"),
-    ("futu_global", "stock_info_global_futu"),
+    ("eastmoney_global", "stock_news_global_em"),
+    ("sina_global", "stock_news_global_sina"),
+    ("cls_global", "stock_news_global_cls"),
+    ("ths_global", "stock_news_global_ths"),
+    ("futu_global", "stock_news_global_futu"),
     ("caixin_selected", "stock_news_main_cx"),
 )
 
