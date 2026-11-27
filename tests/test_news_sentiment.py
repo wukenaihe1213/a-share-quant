@@ -3,6 +3,7 @@ from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import akshare as ak
 import pandas as pd
 
 from src.news_sentiment import (
@@ -83,6 +84,14 @@ class NewsSentimentTests(unittest.TestCase):
                 "stock_news_main_cx",
             ],
         )
+
+
+    def test_global_feed_functions_exist_in_installed_akshare(self):
+        for _, interface_name in GLOBAL_FEEDS:
+            self.assertTrue(
+                callable(getattr(ak, interface_name, None)),
+                f"AKShare interface missing: {interface_name}",
+            )
 
     def test_collect_news_handles_all_providers_unavailable(self):
         # A network-free safety check: the function must still return a structured
