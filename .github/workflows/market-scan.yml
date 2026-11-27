@@ -101,7 +101,7 @@ jobs:
               print(
                   f"No successful scan for {today} found "
                   f"(latest_date={collected_date or 'unknown'}, latest_time={collected_clock or 'unknown'}, "
-              f"status={status}); executing scan."
+                  f"status={status}); executing scan."
               )
           PY
 
