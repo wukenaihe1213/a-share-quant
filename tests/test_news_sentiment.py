@@ -10,6 +10,7 @@ from src.news_sentiment import (
     normalize_news_frame,
     summarize_news,
     collect_news,
+    GLOBAL_FEEDS,
 )
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -67,6 +68,21 @@ class NewsSentimentTests(unittest.TestCase):
         summary = summarize_news([], scanned=True)
         self.assertEqual(summary["sentiment_label"], "no_recent_news")
         self.assertIsNone(summary["average_keyword_score"])
+
+
+    def test_global_feed_names_match_current_akshare_interfaces(self):
+        names = [interface for _, interface in GLOBAL_FEEDS]
+        self.assertEqual(
+            names,
+            [
+                "stock_news_global_em",
+                "stock_news_global_sina",
+                "stock_news_global_cls",
+                "stock_news_global_ths",
+                "stock_news_global_futu",
+                "stock_news_main_cx",
+            ],
+        )
 
     def test_collect_news_handles_all_providers_unavailable(self):
         # A network-free safety check: the function must still return a structured
