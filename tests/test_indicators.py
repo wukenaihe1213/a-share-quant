@@ -225,6 +225,53 @@ class IndicatorTests(unittest.TestCase):
         self.assertGreater(result["atr_pct"], 0)
         self.assertIsInstance(result["atr_suitable"], bool)
 
+    def test_conditional_plan_provides_entry_stop_and_risk_sized_position(self):
+        from src.indicators import calculate_conditional_trade_plan
+
+        plan = calculate_conditional_trade_plan(
+            current_price=10.05,
+            strategy="trend_pullback",
+            tier="B",
+            ma5=10.0,
+            ma10=9.9,
+            ma20=9.7,
+            nearest_support="MA5",
+            nearest_support_distance_pct=0.5,
+            recent_low_5d=9.85,
+            high_20d=10.5,
+            atr14=0.2,
+            daily_change_pct=1.0,
+            liquidity_ok=True,
+            affordable=True,
+        )
+        self.assertTrue(plan["conditional_plan_available"])
+        self.assertLess(plan["conditional_stop_loss"], plan["conditional_entry_low"])
+        self.assertLessEqual(plan["suggested_shares_two_positions"], plan["suggested_shares_single_position"])
+        self.assertLessEqual(plan["estimated_loss_single_position_cny"], 500.0)
+        self.assertIn("回踩MA5", plan["conditional_entry_trigger"])
+
+    def test_conditional_plan_does_not_force_entry_when_support_is_far(self):
+        from src.indicators import calculate_conditional_trade_plan
+
+        plan = calculate_conditional_trade_plan(
+            current_price=12.0,
+            strategy="trend_pullback",
+            tier="B",
+            ma5=10.0,
+            ma10=9.8,
+            ma20=9.5,
+            nearest_support="MA5",
+            nearest_support_distance_pct=20.0,
+            recent_low_5d=11.0,
+            high_20d=12.5,
+            atr14=0.3,
+            daily_change_pct=1.0,
+            liquidity_ok=True,
+            affordable=True,
+        )
+        self.assertFalse(plan["conditional_plan_available"])
+        self.assertIn("等待回踩", plan["conditional_plan_note"])
+
     def test_position_plan_respects_100_share_lots_cash_and_five_percent_risk(self):
         plan = calculate_position_plan(current_price=12.0)
         self.assertEqual(plan["single_position_budget_cap_cny"], 10000.0)
